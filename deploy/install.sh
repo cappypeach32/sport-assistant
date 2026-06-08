@@ -21,6 +21,7 @@ apt-get update -qq
 apt-get install -y -qq git python3 python3-venv python3-pip nginx curl
 
 echo "==> Syncing application to ${APP_DIR}"
+git config --global --add safe.directory "${APP_DIR}" 2>/dev/null || true
 mkdir -p "$(dirname "$APP_DIR")"
 if [[ -d "${APP_DIR}/.git" ]]; then
   git -C "$APP_DIR" fetch origin

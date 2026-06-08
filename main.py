@@ -12,8 +12,6 @@ from jinja2 import Environment, FileSystemLoader
 
 from data.director.sport_service import get_fixtures
 from data.director.match_selection_engine import MatchSelectionEngine
-from data.director.live_match_engine import LiveMatchEngine
-from data.director.event_engine import MatchEventEngine
 
 # Phase 1 — AI Match Intelligence
 from data.director.live_stats_collector import LiveStatsCollector
@@ -56,10 +54,7 @@ jinja_env = Environment(
     auto_reload=True
 )
 
-# Legacy engines (kept for fallback / non-live matches)
 match_selector = MatchSelectionEngine()
-live_engine    = LiveMatchEngine()
-event_engine   = MatchEventEngine()
 
 # Phase 1 engines
 stats_collector  = LiveStatsCollector()
@@ -109,32 +104,73 @@ async def broadcast(payload: dict):
 
 
 # =====================================================
-# MATCH CLOCK (simulated fallback)
+# LIVE EVENTS (API-Football only — no simulated feed)
 # =====================================================
 
-match_minute = 1
+def _event_icon(event_type: str, detail: str) -> str:
+    if event_type == "Goal":
+        return "⚽"
+    if event_type == "Card":
+        return "🟥" if "Red" in detail else "🟨"
+    if event_type == "subst":
+        return "🔄"
+    if event_type == "Var":
+        return "📺"
+    return "📋"
 
 
-def get_simulated_minute() -> int:
-    global match_minute
-    match_minute = (match_minute % 90) + 1
-    return match_minute
+def map_fixture_events(fixture_id: int | None) -> list[dict]:
+    """Real match events from API-Football /fixtures/events."""
+    if not fixture_id:
+        return []
+    rows = stats_collector.get_events(fixture_id)
+    out: list[dict] = []
+    for row in rows:
+        etype = row.get("type", "") or ""
+        detail = row.get("detail", "") or ""
+        player = row.get("player", "") or ""
+        team = row.get("team", "") or ""
+        minute = row.get("minute", 0) or 0
+        message = detail
+        if player:
+            message = f"{detail} — {player}" if detail else player
+        out.append({
+            "type": etype,
+            "detail": detail,
+            "icon": _event_icon(etype, detail),
+            "team": team,
+            "minute": minute,
+            "message": message.strip(" —"),
+            "player": player,
+        })
+    return sorted(out, key=lambda e: e.get("minute", 0), reverse=True)
 
 
-# =====================================================
-# SAFE LIVE NORMALIZER
-# =====================================================
-
-def safe_live_state(state: dict) -> dict:
-    state = state or {}
+def _empty_momentum_payload() -> dict:
     return {
-        "tempo":        state.get("tempo")        or "medium",
-        "pressure":     state.get("pressure")     or "balanced",
-        "dominance":    state.get("dominance")    or "neutral",
-        "momentum":     state.get("momentum")     or "Balanced",
-        "live_summary": state.get("live_summary") or "Очакване на старт",
-        "match_flow":   state.get("match_flow")   or "Предмачово състояние",
+        "home_pct": 50,
+        "away_pct": 50,
+        "home_xg_delta": 0,
+        "away_xg_delta": 0,
+        "home_shots_delta": 0,
+        "away_shots_delta": 0,
+        "home_trend": "—",
+        "away_trend": "—",
+        "dominant_team": "neutral",
+        "pressure_spikes": [],
+        "window_minutes": 8,
+        "data_source": "unavailable",
     }
+
+
+def _phase_live_summary(phase: str, real_available: bool) -> str:
+    if phase == "prematch":
+        return "Преди старта — използвайте предматчовия анализ."
+    if phase == "finished":
+        return "Мачът приключи — вижте финалния анализ."
+    if real_available:
+        return "Live статистики от API-Football."
+    return "Изчакване на live статистики от API-Football…"
 
 
 # =====================================================
@@ -281,48 +317,61 @@ def build_overlay_response(
 
     home = match.get("home", "Home")
     away = match.get("away", "Away")
+    fixture_id = match.get("raw_id")
+    match_phase = get_match_phase(match)
 
-    # --- Simulated fallback (always available) ---
-    raw_live   = live_engine.generate_live_state(match)
-    live_state = safe_live_state(raw_live)
-
-    match_phase_early = get_match_phase(match)
-    minute = get_simulated_minute() if match_phase_early == "live" else 0
-
-    sim_events = event_engine.generate_event(
-        minute=minute,
-        home_team=home,
-        away_team=away,
-    )
-    sim_momentum = event_engine.update_momentum(
-        home_strength=55,
-        away_strength=45,
-    )
-
-    # --- Phase 1 intelligence (real data, if available) ---
+    # --- Phase 1 intelligence (API-Football only) ---
     intel = intelligence or {}
     real_available = intel.get("available", False)
-    live_fixture = {}
+    live_fixture: dict = {}
+
+    if fixture_id:
+        live_fixture = stats_collector.get_live_fixture(fixture_id) or {}
+
+    minute = int(live_fixture.get("minute") or 0)
+    if minute <= 0 and match_phase != "live":
+        minute = 0
 
     if real_available:
         momentum    = intel.get("momentum", {})
         key_moments = intel.get("key_moments", [])
         tactical    = intel.get("tactical", {})
         stats       = intel.get("stats", {})
-
-        # Real score + minute from API
-        live_fixture = stats_collector.get_live_fixture(match.get("raw_id", 0)) or {}
-        real_minute  = live_fixture.get("minute", 0)
-        if real_minute > 0:
-            minute = real_minute
+        real_minute = live_fixture.get("minute", 0)
+        if real_minute and int(real_minute) > 0:
+            minute = int(real_minute)
     else:
-        momentum     = {"home_momentum_pct": sim_momentum["home"], "away_momentum_pct": sim_momentum["away"]}
-        key_moments  = []
-        tactical     = {}
-        stats        = {}
+        momentum    = {}
+        key_moments = []
+        tactical    = {}
+        stats       = {}
 
-    ui_state   = build_ui_state(momentum, live_state)
-    match_phase = get_match_phase(match)
+    momentum_payload = (
+        {
+            "home_pct":           momentum.get("home_momentum_pct", 50),
+            "away_pct":           momentum.get("away_momentum_pct", 50),
+            "home_xg_delta":      momentum.get("home_xg_delta", 0),
+            "away_xg_delta":      momentum.get("away_xg_delta", 0),
+            "home_shots_delta":   momentum.get("home_shots_delta", 0),
+            "away_shots_delta":   momentum.get("away_shots_delta", 0),
+            "home_trend":         momentum.get("home_trend", "—"),
+            "away_trend":         momentum.get("away_trend", "—"),
+            "dominant_team":      momentum.get("dominant_team", "neutral"),
+            "pressure_spikes":    momentum.get("pressure_spikes", []),
+            "window_minutes":     momentum.get("window_minutes", 8),
+            "data_source":        "real",
+        }
+        if real_available
+        else _empty_momentum_payload()
+    )
+
+    match_events = (
+        map_fixture_events(fixture_id)
+        if fixture_id and match_phase in ("live", "finished")
+        else []
+    )
+
+    ui_state = build_ui_state(momentum, {}) if real_available else {"theme": "balanced", "animations": {"pulse": False, "glow": False}}
 
     # --- Pre-match editorial ---
     pm      = prematch or {}
@@ -335,7 +384,12 @@ def build_overlay_response(
     # --- Live win probability ---
     win_prob = {}
     pm_pred = pm_data.get("prediction", {})
-    if match_phase in ("live", "finished") and live_hg is not None and live_ag is not None:
+    if (
+        real_available
+        and match_phase in ("live", "finished")
+        and live_hg is not None
+        and live_ag is not None
+    ):
         home_xg_val = float(stats.get("home", {}).get("xg", 0) or 0)
         away_xg_val = float(stats.get("away", {}).get("xg", 0) or 0)
         win_prob = calc_win_prob(
@@ -384,25 +438,12 @@ def build_overlay_response(
 
         "editorial": {
             "intro":        f"{home} срещу {away}",
-            "live_summary": live_state["live_summary"],
-            "key_factors":  [f"Темпо: {live_state['tempo']}"],
+            "live_summary": _phase_live_summary(match_phase, real_available),
+            "key_factors":  pm_data.get("key_factors", [])[:3] if pm.get("available") else [],
         },
 
-        # Phase 1 — real momentum
-        "momentum": {
-            "home_pct":           momentum.get("home_momentum_pct", 50),
-            "away_pct":           momentum.get("away_momentum_pct", 50),
-            "home_xg_delta":      momentum.get("home_xg_delta", 0),
-            "away_xg_delta":      momentum.get("away_xg_delta", 0),
-            "home_shots_delta":   momentum.get("home_shots_delta", 0),
-            "away_shots_delta":   momentum.get("away_shots_delta", 0),
-            "home_trend":         momentum.get("home_trend", "➡ Stable"),
-            "away_trend":         momentum.get("away_trend", "➡ Stable"),
-            "dominant_team":      momentum.get("dominant_team", "neutral"),
-            "pressure_spikes":    momentum.get("pressure_spikes", []),
-            "window_minutes":     momentum.get("window_minutes", 8),
-            "data_source":        "real" if real_available else "simulated",
-        },
+        # Phase 1 — real momentum (hidden in UI when data_source is unavailable)
+        "momentum": momentum_payload,
 
         # Phase 1 — key moments alerts
         "key_moments": key_moments[:3],  # top 3 by severity
@@ -430,26 +471,7 @@ def build_overlay_response(
             "away_dangerous":       stats.get("away", {}).get("dangerous_attacks", "–"),
         },
 
-        # Legacy fields (kept for backward compatibility with overlay.html)
-        "prediction": {
-            "home_win": 45,
-            "away_win": 30,
-            "draw":     25,
-        },
-
-        "raw": {
-            "live_intelligence": {
-                "tempo":          live_state["tempo"],
-                "pressure":       live_state["pressure"],
-                "dominance":      live_state["dominance"],
-                "momentum":       live_state["momentum"],
-                "home_momentum":  momentum.get("home_momentum_pct", sim_momentum.get("home", 50)),
-                "away_momentum":  momentum.get("away_momentum_pct", sim_momentum.get("away", 50)),
-                "minute":         minute,
-            }
-        },
-
-        "events":   sim_events,
+        "events":   match_events,
         "ui_state": ui_state,
 
         # Phase 2 — pre-match editorial
@@ -534,7 +556,7 @@ async def live_stats_loop():
             # Run sync HTTP call in executor to avoid blocking the event loop
             loop_ref    = asyncio.get_running_loop()
             minute_raw  = await loop_ref.run_in_executor(None, stats_collector.get_match_minute, fixture_id)
-            minute      = minute_raw or (get_simulated_minute() if match_phase == "live" else 0)
+            minute      = int(minute_raw or 0)
             print(f"[LOOP] tick phase={match_phase} fixture={fixture_id} min={minute}")
             intelligence = {}
 

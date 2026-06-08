@@ -741,6 +741,17 @@ body {
 .waiting-state .w-icon { font-size: 40px; opacity: .4; }
 .waiting-state .w-text { font-size: 17px; }
 
+.internal-notice {
+    margin: 0 0 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(77, 159, 255, 0.25);
+    background: rgba(77, 159, 255, 0.08);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
 /* ===== SCROLLBAR ===== */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -856,6 +867,10 @@ body {
         <div class="w-text">Select a match to begin analysis</div>
     </div>
 
+    <div class="internal-notice" id="internal-notice" style="display:none">
+        Само реални данни от API-Football. Без симулации и демо събития — празните секции изчакват upstream.
+    </div>
+
     <!-- MATCH HEADER -->
     <div class="card" id="card-header" style="display:none">
         <div class="card-label"><span class="dot"></span> Match</div>
@@ -890,7 +905,7 @@ body {
 
     <!-- WIN PROBABILITY (live) -->
     <div class="card" id="card-win-prob" style="display:none">
-        <div class="card-label"><span class="dot" style="background:var(--purple)"></span> Вероятност за победа</div>
+        <div class="card-label"><span class="dot" style="background:var(--purple)"></span> Моделна вероятност (live)</div>
         <div id="win-prob-body"></div>
     </div>
 
@@ -948,7 +963,7 @@ body {
         <div class="card-label">
             <span class="dot"></span>
             xG Momentum Engine
-            <span id="momentum-source" class="data-source-badge ds-sim">simulated</span>
+            <span id="momentum-source" class="data-source-badge ds-real">API-Football</span>
         </div>
 
         <div class="momentum-section">
@@ -1321,13 +1336,25 @@ function renderHeader(match, data) {
 /* =========================================================
    MOMENTUM ENGINE
    ========================================================= */
+function hasLiveStats(data) {
+    return data?.meta?.real_data === true || data?.momentum?.data_source === "real";
+}
+
 function renderMomentum(data) {
+    const card   = document.getElementById("card-momentum");
     const m      = data.momentum || {};
     const home   = data.match?.home || "Home";
     const away   = data.match?.away || "Away";
+    const isReal = m.data_source === "real";
+
+    if (!isReal) {
+        if (card) card.style.display = "none";
+        return;
+    }
+    if (card) card.style.display = "block";
+
     const homeP  = m.home_pct  ?? 50;
     const awayP  = m.away_pct  ?? 50;
-    const isReal = m.data_source === "real";
 
     setText("home-momentum-pct", homeP.toFixed(1) + "%");
     setText("away-momentum-pct", awayP.toFixed(1) + "%");
@@ -1344,14 +1371,10 @@ function renderMomentum(data) {
     renderDelta("home-shots-delta", m.home_shots_delta, "+", "count");
     renderDelta("away-shots-delta", m.away_shots_delta, "+", "count");
 
-    // Data source badge
     const srcBadge = document.getElementById("momentum-source");
-    if (isReal) {
-        srcBadge.textContent = "● real data";
+    if (srcBadge) {
+        srcBadge.textContent = "● API-Football";
         srcBadge.className   = "data-source-badge ds-real";
-    } else {
-        srcBadge.textContent = "simulated";
-        srcBadge.className   = "data-source-badge ds-sim";
     }
 
     // Pressure spikes
@@ -1381,8 +1404,15 @@ function renderDelta(elId, val, prefix, type) {
    KEY MOMENTS DETECTOR
    ========================================================= */
 function renderKeyMoments(data) {
+    const card    = document.getElementById("card-moments");
     const moments = data.key_moments || [];
     const el      = document.getElementById("moments-list");
+
+    if (!hasLiveStats(data) || !moments.length) {
+        if (card) card.style.display = "none";
+        return;
+    }
+    if (card) card.style.display = "block";
 
     if (!moments.length) {
         el.innerHTML = `<div class="no-moments">No significant moments detected</div>`;
@@ -1405,6 +1435,7 @@ function renderKeyMoments(data) {
    TACTICAL ENGINE
    ========================================================= */
 function renderTactical(data) {
+    const card  = document.getElementById("card-tactical");
     const tac   = data.tactical || {};
     const home  = data.match?.home || "Home";
     const away  = data.match?.away || "Away";
@@ -1412,6 +1443,14 @@ function renderTactical(data) {
     const aForm = tac.away_formation || "";
     const hSty  = tac.home_styles || [];
     const aSty  = tac.away_styles || [];
+    const nar   = tac.narrative || "";
+    const hasContent = Boolean(hForm || aForm || hSty.length || aSty.length || nar) && hasLiveStats(data);
+
+    if (!hasContent) {
+        if (card) card.style.display = "none";
+        return;
+    }
+    if (card) card.style.display = "block";
 
     const gridEl = document.getElementById("tactical-grid");
     gridEl.innerHTML = [
@@ -1422,20 +1461,18 @@ function renderTactical(data) {
             <div class="tac-team-name">${t.name}</div>
             ${t.formation ? `<div class="tac-formation">${t.formation}</div>` : ""}
             <div class="tac-styles">
-                ${(t.styles.length ? t.styles : ["balanced"]).map(s =>
-                    `<span class="style-tag">${s}</span>`
-                ).join("")}
+                ${t.styles.map(s => `<span class="style-tag">${s}</span>`).join("")}
             </div>
         </div>
     `).join("");
 
     const narEl = document.getElementById("tactical-narrative");
-    const nar   = tac.narrative || "";
     if (nar) {
         narEl.innerHTML = nar.replace(/\n/g, "<br>");
         narEl.style.display = "block";
     } else {
-        narEl.innerHTML = `<span class="narrative-empty">Awaiting tactical analysis...</span>`;
+        narEl.innerHTML = "";
+        narEl.style.display = "none";
     }
 }
 
@@ -1451,8 +1488,20 @@ const STAT_ROWS = [
 ];
 
 function renderStats(data) {
+    const card = document.getElementById("card-stats");
     const s  = data.live_stats || {};
     const el = document.getElementById("stats-table");
+    const hasAny = STAT_ROWS.some(r => {
+        const hv = s[r.keyH];
+        const av = s[r.keyA];
+        return (hv !== undefined && hv !== "–" && hv !== null) || (av !== undefined && av !== "–" && av !== null);
+    });
+
+    if (!hasLiveStats(data) || !hasAny) {
+        if (card) card.style.display = "none";
+        return;
+    }
+    if (card) card.style.display = "block";
 
     const rows = STAT_ROWS.map(r => {
         const hv  = s[r.keyH] !== undefined && s[r.keyH] !== "–" ? s[r.keyH] : null;
@@ -1482,22 +1531,25 @@ function renderStats(data) {
    EVENTS FEED
    ========================================================= */
 function renderEvents(data) {
-    const ev  = data.events;
-    const el  = document.getElementById("events-feed");
+    const card = document.getElementById("card-events");
+    const evs  = Array.isArray(data.events) ? data.events : (data.events ? [data.events] : []);
+    const el   = document.getElementById("events-feed");
+    const phase = data.phase || "";
 
-    if (!ev || ev.type === "TACTICAL_PLAY") {
-        el.innerHTML = `<div class="no-events">Tactical play — no notable event</div>`;
+    if (phase === "prematch" || !evs.length) {
+        if (card) card.style.display = "none";
         return;
     }
+    if (card) card.style.display = "block";
 
-    el.innerHTML = `
+    el.innerHTML = evs.map(ev => `
         <div class="event-item">
-            <span class="event-icon">${ev.icon || "📊"}</span>
-            <span class="event-min">${ev.minute || "--"}'</span>
-            <span class="event-type">${ev.type?.replace(/_/g," ") || ""}</span>
+            <span class="event-icon">${ev.icon || "📋"}</span>
+            <span class="event-min">${ev.minute ?? "—"}'</span>
+            <span class="event-type">${(ev.detail || ev.type || "").replace(/_/g, " ")}</span>
             <span class="event-team">${ev.team || ""}</span>
             <span style="flex:1;text-align:right;color:var(--muted);font-size:12px">${ev.message || ""}</span>
-        </div>`;
+        </div>`).join("");
 }
 
 /* =========================================================
@@ -2063,7 +2115,10 @@ function renderPrematch(data) {
         <!-- Prediction -->
         ${pred.home_win_pct !== undefined ? `
         <div>
-            <div class="card-label" style="margin-bottom:8px"><span class="dot"></span> Прогноза</div>
+            <div class="card-label" style="margin-bottom:4px"><span class="dot"></span> Статистическа оценка (1X2)</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.4">
+                ${pred.source_label || "Вътрешен модел — не е съвет за залагане"}
+            </div>
 
             <!-- 1X2 + Score -->
             <div class="prediction-block" style="margin-bottom:10px">
@@ -2161,6 +2216,8 @@ function showCardsForPhase(phase) {
 
     document.getElementById("card-header").style.display  = "block";
     document.getElementById("waiting-state").style.display = "none";
+    const notice = document.getElementById("internal-notice");
+    if (notice) notice.style.display = "block";
 
     const allSpecial = [...new Set([...liveCards, ...finishedCards, ...prematchCards])];
 

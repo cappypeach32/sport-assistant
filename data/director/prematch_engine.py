@@ -703,6 +703,8 @@ class PreMatchEngine:
                 "cs_home_pct":   cs_home_pct,
                 "cs_away_pct":   cs_away_pct,
                 "exp_goals":     round(exp_goals, 2),
+                "source":        "statistical_model",
+                "source_label":  "Статистически модел (форма + класиране + Poisson) — не е съвет за залагане",
             },
             "gpt_narrative":  "",   # populated if GPT available
             "top_scorers":    top_scorers or {"home": [], "away": []},
