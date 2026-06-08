@@ -86,6 +86,11 @@ latest_commentary:   list  = []   # list of { minute, title, text }
 _last_ht_status:     str   = ""
 _last_ft_status:     str   = ""
 _last_goal_count:    int   = 0    # detect goals for forced commentary refresh
+latest_health:       dict  = {
+    "last_poll_at": None,
+    "last_error":   "",
+    "api_ok":       False,
+}
 
 
 # =====================================================
@@ -208,20 +213,83 @@ def build_ui_state(momentum: dict, live_state: dict) -> dict:
 LIVE_STATUSES = {
     "First Half", "Second Half", "Half Time",
     "Extra Time", "Break Time", "Penalty In Progress",
-    "Live", "In Progress"
+    "Live", "In Progress",
 }
 NS_STATUSES = {"Not Started", "Time To Be Defined", "Scheduled"}
+LIVE_STATUSES_SHORT = {"1H", "2H", "HT", "ET", "BT", "P", "LIVE", "INT"}
+FINISHED_STATUSES_SHORT = {"FT", "AET", "PEN"}
+HT_STATUSES_SHORT = {"HT"}
+
+
+def _match_status_long(match: dict) -> str:
+    return (match.get("status") or "").strip()
+
+
+def _match_status_short(match: dict) -> str:
+    return (match.get("status_short") or "").strip().upper()
+
+
+def sync_match_from_live_fixture(match: dict, live_fixture: dict) -> None:
+    """Refresh status and score on active_match from latest API poll."""
+    if not match or not live_fixture:
+        return
+    short = live_fixture.get("status_short")
+    long_ = live_fixture.get("status_long")
+    if short:
+        match["status_short"] = short
+    if long_:
+        match["status"] = long_
+    hg = live_fixture.get("home_goals")
+    ag = live_fixture.get("away_goals")
+    if hg is not None:
+        match["home_goals"] = hg
+    if ag is not None:
+        match["away_goals"] = ag
+
+
+def is_halftime(match: dict) -> bool:
+    short = _match_status_short(match)
+    long_lower = _match_status_long(match).lower()
+    if short in HT_STATUSES_SHORT:
+        return True
+    return "half time" in long_lower or long_lower == "halftime"
+
+
+def is_finished_match(match: dict) -> bool:
+    short = _match_status_short(match)
+    long_lower = _match_status_long(match).lower()
+    if short in FINISHED_STATUSES_SHORT:
+        return True
+    return any(
+        kw in long_lower
+        for kw in ("match finished", "full time", "after extra time", "penalties")
+    )
+
 
 def get_match_phase(match: dict) -> str:
     """Returns 'prematch' | 'live' | 'finished'"""
-    status = (match.get("status") or "").strip()
-    if status in LIVE_STATUSES:
-        return "live"
-    if status in NS_STATUSES:
-        return "prematch"
-    if "Full Time" in status or "Finished" in status or status in {"FT", "AET", "PEN"}:
+    if is_finished_match(match):
         return "finished"
-    # fallback: check short status via live fixture
+
+    status = _match_status_long(match)
+    short = _match_status_short(match)
+
+    if status in LIVE_STATUSES or short in LIVE_STATUSES_SHORT:
+        return "live"
+
+    long_lower = status.lower()
+    if any(
+        kw in long_lower
+        for kw in (
+            "first half", "second half", "half time", "extra time",
+            "penalty", "in progress", "break time",
+        )
+    ):
+        return "live"
+
+    if short == "NS" or status in NS_STATUSES:
+        return "prematch"
+
     return "prematch"
 
 
@@ -425,15 +493,16 @@ def build_overlay_response(
         "phase":   match_phase,
 
         "match": {
-            "home":        home,
-            "away":        away,
-            "status":      match.get("status"),
-            "competition": match.get("competition"),
-            "minute":      minute,
-            "raw_id":      match.get("raw_id"),
-            "start_time":  match.get("start_time"),
-            "home_goals":  live_fixture.get("home_goals"),
-            "away_goals":  live_fixture.get("away_goals"),
+            "home":          home,
+            "away":          away,
+            "status":        match.get("status"),
+            "status_short":  match.get("status_short", live_fixture.get("status_short", "")),
+            "competition":   match.get("competition"),
+            "minute":        minute,
+            "raw_id":        match.get("raw_id"),
+            "start_time":    match.get("start_time"),
+            "home_goals":    live_fixture.get("home_goals"),
+            "away_goals":    live_fixture.get("away_goals"),
         },
 
         "editorial": {
@@ -513,6 +582,13 @@ def build_overlay_response(
             "mode":          "AI_MATCH_INTELLIGENCE_V3",
             "real_data":     real_available,
             "generated_at":  datetime.now(timezone.utc).isoformat(),
+            "health": {
+                "last_poll_at":      latest_health.get("last_poll_at"),
+                "poll_interval_sec": POLL_INTERVAL,
+                "api_ok":            latest_health.get("api_ok", bool(live_fixture)),
+                "last_error":        latest_health.get("last_error", ""),
+                "status_short":      live_fixture.get("status_short") or match.get("status_short", ""),
+            },
         },
     }
 
@@ -529,7 +605,7 @@ async def live_stats_loop():
     Polls API-Football every 45s for the active match,
     builds full Phase 1 intelligence, and pushes to all clients.
     """
-    global _last_ft_status, latest_postmatch, _last_ht_status, latest_halftime, latest_narrative, latest_commentary, _last_goal_count
+    global _last_ft_status, latest_postmatch, _last_ht_status, latest_halftime, latest_narrative, latest_commentary, _last_goal_count, latest_health
     print("[LOOP] Live stats loop started")
 
     while True:
@@ -543,6 +619,11 @@ async def live_stats_loop():
             continue
 
         try:
+            loop_ref     = asyncio.get_running_loop()
+            live_fixture = await loop_ref.run_in_executor(
+                None, stats_collector.get_live_fixture, fixture_id
+            )
+            sync_match_from_live_fixture(active_match, live_fixture or {})
             match_phase = get_match_phase(active_match)
 
             # For finished matches, stop re-broadcasting once postmatch is ready
@@ -553,11 +634,11 @@ async def live_stats_loop():
             if match_phase == "prematch" and latest_prematch.get("available"):
                 await asyncio.sleep(40)  # extra delay on top of POLL_INTERVAL
 
-            # Run sync HTTP call in executor to avoid blocking the event loop
-            loop_ref    = asyncio.get_running_loop()
-            minute_raw  = await loop_ref.run_in_executor(None, stats_collector.get_match_minute, fixture_id)
-            minute      = int(minute_raw or 0)
-            print(f"[LOOP] tick phase={match_phase} fixture={fixture_id} min={minute}")
+            minute = int(live_fixture.get("minute") or 0) if live_fixture else 0
+            print(
+                f"[LOOP] tick phase={match_phase} fixture={fixture_id} "
+                f"min={minute} status={active_match.get('status_short') or active_match.get('status')}"
+            )
             intelligence = {}
 
             if match_phase == "live":
@@ -609,8 +690,7 @@ async def live_stats_loop():
                 _last_ft_status = match_phase
 
             # Half-time analysis trigger
-            current_status = active_match.get("status", "")
-            if current_status == "HT" and _last_ht_status != "HT":
+            if is_halftime(active_match) and _last_ht_status != "HT":
                 _last_ht_status = "HT"
                 live_stats_snap = latest_intelligence.get("stats", {})
                 events_snap     = stats_collector._events_cache.get(fixture_id, {}).get("data", [])
@@ -631,8 +711,8 @@ async def live_stats_loop():
                 if ht_text:
                     latest_halftime = ht_text
                     print(f"[HALFTIME] Analysis ready for {active_match.get('home')} vs {active_match.get('away')}")
-            elif current_status != "HT":
-                _last_ht_status = current_status
+            elif not is_halftime(active_match):
+                _last_ht_status = active_match.get("status_short", "")
 
             # Commentary queue — refresh every 5 min or on goal
             if match_phase == "live" and intelligence.get("available"):
@@ -672,9 +752,19 @@ async def live_stats_loop():
             payload["postmatch_summary"]  = latest_postmatch
             payload["commentary_queue"]   = latest_commentary
             await broadcast(payload)
+            latest_health = {
+                "last_poll_at": datetime.now(timezone.utc).isoformat(),
+                "last_error":   "",
+                "api_ok":       bool(live_fixture),
+            }
             print(f"[LOOP] broadcast done — real={intelligence.get('available', False)}")
 
         except Exception as e:
+            latest_health = {
+                "last_poll_at": datetime.now(timezone.utc).isoformat(),
+                "last_error":   str(e),
+                "api_ok":       False,
+            }
             print(f"[LOOP] Error: {e}")
 
 

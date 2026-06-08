@@ -28,6 +28,90 @@ else:
     _gpt_client = None
 
 CACHE_TTL     = 120   # 2 мин за pre-match данни — paid plan: up from 5 min
+
+
+# --------------------------------------------------
+# Event helpers — accept normalized (overlay) or raw API shape
+# --------------------------------------------------
+
+def _evt_minute(e: dict) -> int:
+    if "minute" in e:
+        return int(e.get("minute") or 0)
+    return int(e.get("time", {}).get("elapsed") or 0)
+
+
+def _evt_team(e: dict) -> str:
+    team = e.get("team")
+    if isinstance(team, dict):
+        return team.get("name", "") or ""
+    return str(team or "")
+
+
+def _evt_player(e: dict) -> str:
+    player = e.get("player")
+    if isinstance(player, dict):
+        return player.get("name", "") or ""
+    return str(player or "")
+
+
+def _evt_detail(e: dict) -> str:
+    return e.get("detail", "") or ""
+
+
+def _evt_assist(e: dict) -> str:
+    assist = e.get("assist")
+    if isinstance(assist, dict):
+        return assist.get("name", "?") or "?"
+    return "?"
+
+
+def _format_events_block(events: list) -> str:
+    """Bulgarian event summary for GPT prompts."""
+    goals = [e for e in events if e.get("type") == "Goal"]
+    cards = [e for e in events if e.get("type") == "Card"]
+    subs  = [e for e in events if e.get("type") == "subst"]
+
+    parts = []
+    if goals:
+        parts.append(
+            "ГОЛОВЕ:\n"
+            + "\n".join(
+                f"  {_evt_minute(e)}' — {_evt_team(e)}: {_evt_player(e)}"
+                for e in goals
+            )
+        )
+    if cards:
+        parts.append(
+            "КАРТОНИ:\n"
+            + "\n".join(
+                f"  {_evt_minute(e)}' — {_evt_team(e)}: {_evt_player(e)} ({_evt_detail(e)})"
+                for e in cards
+            )
+        )
+    if subs:
+        parts.append(
+            "СМЕНИ:\n"
+            + "\n".join(
+                f"  {_evt_minute(e)}' — {_evt_team(e)}: {_evt_assist(e)} → {_evt_player(e)}"
+                for e in subs
+            )
+        )
+    return "\n".join(parts)
+
+
+def _format_event_line(e: dict) -> str:
+    t = _evt_minute(e)
+    typ = e.get("type", "")
+    det = _evt_detail(e)
+    team = _evt_team(e)
+    player = _evt_player(e)
+    if typ == "Goal":
+        return f"{t}' ГОЛ {team}: {player} ({det})"
+    if typ == "Card":
+        return f"{t}' КАРТОН {team}: {player} ({det})"
+    if typ == "subst":
+        return f"{t}' СМЯНА {team}: влиза {player}"
+    return f"{t}' {typ} {team}"
 GPT_COOLDOWN  = 600   # 10 мин между GPT calls за един матч (непроменено — GPT ограничение)
 
 # Форма → текст
@@ -1030,26 +1114,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         hs = live_stats.get("home", {})
         as_ = live_stats.get("away", {})
 
-        events_text = ""
-        goals   = [e for e in events if e.get("type") == "Goal"]
-        cards   = [e for e in events if e.get("type") == "Card"]
-        subs    = [e for e in events if e.get("type") == "subst"]
-
-        if goals:
-            events_text += "ГОЛОВЕ:\n" + "\n".join(
-                f"  {e['time']['elapsed']}' — {e['team']['name']}: {e['player']['name']}"
-                for e in goals
-            ) + "\n"
-        if cards:
-            events_text += "КАРТОНИ:\n" + "\n".join(
-                f"  {e['time']['elapsed']}' — {e['team']['name']}: {e['player']['name']} ({e['detail']})"
-                for e in cards
-            ) + "\n"
-        if subs:
-            events_text += "СМЕНИ:\n" + "\n".join(
-                f"  {e['time']['elapsed']}' — {e['team']['name']}: {e.get('assist',{}).get('name','?')} → {e['player']['name']}"
-                for e in subs
-            ) + "\n"
+        events_text = _format_events_block(events)
 
         prompt = f"""Ти си спортен коментатор за стрийм предаване. Пишеш САМО на Български. Стилът е ТВ-готов и ангажиращ.
 
@@ -1153,20 +1218,8 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         hs  = live_stats.get("home", {})
         as_ = live_stats.get("away", {})
 
-        # Recent events (last 10 min)
-        recent_events = [e for e in events if (minute - (e.get("time", {}).get("elapsed") or 0)) <= 12]
-        def fmt_event(e):
-            t = e.get("time", {}).get("elapsed", "?")
-            typ = e.get("type", "")
-            det = e.get("detail", "")
-            team = e.get("team", {}).get("name", "")
-            player = e.get("player", {}).get("name", "")
-            if typ == "Goal":     return f"{t}' ГОЛ {team}: {player} ({det})"
-            if typ == "Card":     return f"{t}' КАРТОН {team}: {player} ({det})"
-            if typ == "subst":    return f"{t}' СМЯНА {team}: влиза {player}"
-            return f"{t}' {typ} {team}"
-
-        recent_text = "\n".join(fmt_event(e) for e in recent_events[-8:]) or "Няма нови събития"
+        recent_events = [e for e in events if (minute - _evt_minute(e)) <= 12]
+        recent_text = "\n".join(_format_event_line(e) for e in recent_events[-8:]) or "Няма нови събития"
 
         dom_team = momentum.get("dominant_team", "neutral")
         h_mom = momentum.get("home_momentum_pct", 50)
@@ -1316,19 +1369,20 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         hs  = live_stats.get("home", {})
         as_ = live_stats.get("away", {})
 
-        # Goals by team
-        goals_home = [e for e in events if e.get("type") == "Goal" and e.get("team", {}).get("name") == home]
-        goals_away = [e for e in events if e.get("type") == "Goal" and e.get("team", {}).get("name") == away]
-        cards_home = [e for e in events if e.get("type") == "Card" and e.get("team", {}).get("name") == home]
-        cards_away = [e for e in events if e.get("type") == "Card" and e.get("team", {}).get("name") == away]
-        subs_home  = [e for e in events if e.get("type") == "subst" and e.get("team", {}).get("name") == home]
-        subs_away  = [e for e in events if e.get("type") == "subst" and e.get("team", {}).get("name") == away]
+        goals_home = [e for e in events if e.get("type") == "Goal" and _evt_team(e) == home]
+        goals_away = [e for e in events if e.get("type") == "Goal" and _evt_team(e) == away]
+        cards_home = [e for e in events if e.get("type") == "Card" and _evt_team(e) == home]
+        cards_away = [e for e in events if e.get("type") == "Card" and _evt_team(e) == away]
+        subs_home  = [e for e in events if e.get("type") == "subst" and _evt_team(e) == home]
+        subs_away  = [e for e in events if e.get("type") == "subst" and _evt_team(e) == away]
 
         def fmt_goals(glist):
-            return ", ".join(f"{g['player']['name']} {g['time']['elapsed']}'" for g in glist) or "—"
+            return ", ".join(f"{_evt_player(g)} {_evt_minute(g)}'" for g in glist) or "—"
 
         def fmt_cards(clist):
-            return ", ".join(f"{c['player']['name']} ({c['detail']}) {c['time']['elapsed']}'" for c in clist) or "—"
+            return ", ".join(
+                f"{_evt_player(c)} ({_evt_detail(c)}) {_evt_minute(c)}'" for c in clist
+            ) or "—"
 
         # Pre-match prediction context
         pred_ctx = ""

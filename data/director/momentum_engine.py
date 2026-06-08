@@ -140,14 +140,14 @@ class MomentumEngine:
 
     def _trend_label(self, xg_delta: float, shots_delta: int, dangerous_delta: int) -> str:
         if xg_delta > 0.20 or shots_delta >= 5:
-            return "🔥 Attacking surge"
+            return "🔥 Атакуващ натиск"
         if xg_delta > 0.10 or shots_delta >= 3 or dangerous_delta >= 6:
-            return "📈 Pressure increasing"
+            return "📈 Нарастващ натиск"
         if xg_delta < -0.05 and shots_delta <= 0:
-            return "📉 Fading"
+            return "📉 Затихва"
         if dangerous_delta <= -5:
-            return "⬇ Pressing drop"
-        return "➡ Stable"
+            return "⬇ Спад в пресинга"
+        return "➡ Стабилно"
 
     def _empty(self) -> dict:
         return {
@@ -160,8 +160,8 @@ class MomentumEngine:
             "home_dangerous_delta": 0,
             "away_dangerous_delta": 0,
             "possession_drift":     0.0,
-            "home_trend":           "➡ Stable",
-            "away_trend":           "➡ Stable",
+            "home_trend":           "➡ Стабилно",
+            "away_trend":           "➡ Стабилно",
             "dominant_team":        "neutral",
             "momentum_balance":     0.0,
             "pressure_spikes":      [],

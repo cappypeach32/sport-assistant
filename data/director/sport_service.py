@@ -94,6 +94,7 @@ def get_fixtures(date=None):
                     "competition":    f["league"]["name"],
                     "competition_id": f["league"]["id"],
                     "status":         f["fixture"]["status"]["long"],
+                    "status_short":   f["fixture"]["status"]["short"],
                     "start_time":     f["fixture"]["date"],
                     "raw_id":         f["fixture"]["id"]
                 })

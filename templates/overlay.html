@@ -803,6 +803,30 @@ body {
     to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ===== HEALTH BAR ===== */
+.health-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 11px;
+    color: var(--muted);
+}
+.health-item { display: flex; align-items: center; gap: 5px; }
+.health-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.health-ok  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.health-warn { background: #eab308; }
+.health-err  { background: var(--red); animation: pulse 1.5s infinite; }
+
 </style>
 </head>
 
@@ -850,6 +874,20 @@ body {
                placeholder="Търси отбор..."
                oninput="filterMatches()"
                style="margin-top:6px"/>
+
+        <div class="health-bar" id="health-bar">
+            <div class="health-item">
+                <span class="health-dot health-warn" id="health-ws-dot"></span>
+                <span id="health-ws-text">Свързване...</span>
+            </div>
+            <div class="health-item" id="health-api-wrap" style="display:none">
+                <span class="health-dot health-warn" id="health-api-dot"></span>
+                <span id="health-api-text">API: —</span>
+            </div>
+            <div class="health-item" id="health-poll-wrap" style="display:none">
+                <span id="health-poll-text">Обновено: —</span>
+            </div>
+        </div>
     </div>
 
     <div class="match-list" id="matches"></div>
@@ -864,7 +902,7 @@ body {
     <!-- WAITING STATE -->
     <div class="waiting-state" id="waiting-state">
         <div class="w-icon">📡</div>
-        <div class="w-text">Select a match to begin analysis</div>
+        <div class="w-text">Изберете мач, за да започне анализът</div>
     </div>
 
     <div class="internal-notice" id="internal-notice" style="display:none">
@@ -873,7 +911,7 @@ body {
 
     <!-- MATCH HEADER -->
     <div class="card" id="card-header" style="display:none">
-        <div class="card-label"><span class="dot"></span> Match</div>
+        <div class="card-label"><span class="dot"></span> Мач</div>
         <div class="match-header">
 
             <div class="team-block">
@@ -885,7 +923,7 @@ body {
                 <div class="match-score" id="match-score">— : —</div>
                 <div class="match-minute" id="match-minute" style="display:none"></div>
                 <div class="match-competition" id="competition"></div>
-                <div class="match-status-badge status-ns" id="status-badge">Not Started</div>
+                <div class="match-status-badge status-ns" id="status-badge">Преди старт</div>
             </div>
 
             <div class="team-block" style="align-items:flex-end">
@@ -962,7 +1000,7 @@ body {
     <div class="card" id="card-momentum" style="display:none">
         <div class="card-label">
             <span class="dot"></span>
-            xG Momentum Engine
+            xG Импулс
             <span id="momentum-source" class="data-source-badge ds-real">API-Football</span>
         </div>
 
@@ -971,11 +1009,11 @@ body {
             <div class="momentum-teams">
                 <div class="momentum-team home-col">
                     <div class="momentum-pct" id="home-momentum-pct">50%</div>
-                    <div class="momentum-trend" id="home-trend">➡ Stable</div>
+                    <div class="momentum-trend" id="home-trend">➡ Стабилно</div>
                 </div>
                 <div class="momentum-team away-col" style="align-items:flex-end">
                     <div class="momentum-pct" id="away-momentum-pct">50%</div>
-                    <div class="momentum-trend" id="away-trend">➡ Stable</div>
+                    <div class="momentum-trend" id="away-trend">➡ Стабилно</div>
                 </div>
             </div>
 
@@ -992,11 +1030,11 @@ body {
                         <span class="delta-value" id="home-xg-delta">—</span>
                     </div>
                     <div class="delta-item">
-                        <span class="delta-label">Shots Δ</span>
+                        <span class="delta-label">Удари Δ</span>
                         <span class="delta-value" id="home-shots-delta">—</span>
                     </div>
                     <div class="delta-item">
-                        <span class="delta-label">Window</span>
+                        <span class="delta-label">Прозорец</span>
                         <span class="delta-value delta-neu" id="window-label">8 min</span>
                     </div>
                 </div>
@@ -1007,7 +1045,7 @@ body {
                         <span class="delta-value" id="away-xg-delta">—</span>
                     </div>
                     <div class="delta-item" style="flex-direction:row-reverse">
-                        <span class="delta-label" style="text-align:right">Shots Δ</span>
+                        <span class="delta-label" style="text-align:right">Удари Δ</span>
                         <span class="delta-value" id="away-shots-delta">—</span>
                     </div>
                 </div>
@@ -1020,32 +1058,32 @@ body {
 
     <!-- KEY MOMENTS DETECTOR -->
     <div class="card" id="card-moments" style="display:none">
-        <div class="card-label"><span class="dot"></span> Key Moments Detector</div>
+        <div class="card-label"><span class="dot"></span> Ключови моменти</div>
         <div class="moments-list" id="moments-list">
-            <div class="no-moments">No significant moments detected yet</div>
+            <div class="no-moments">Все още няма значими моменти</div>
         </div>
     </div>
 
     <!-- TACTICAL ENGINE -->
     <div class="card" id="card-tactical" style="display:none">
-        <div class="card-label"><span class="dot"></span> AI Tactical Engine</div>
+        <div class="card-label"><span class="dot"></span> Тактически анализ</div>
         <div class="tactical-grid" id="tactical-grid"></div>
         <div class="tactical-narrative" id="tactical-narrative">
-            <span class="narrative-empty">Awaiting tactical data...</span>
+            <span class="narrative-empty">Изчакване на тактически данни...</span>
         </div>
     </div>
 
     <!-- LIVE STATS -->
     <div class="card" id="card-stats" style="display:none">
-        <div class="card-label"><span class="dot"></span> Live Statistics</div>
+        <div class="card-label"><span class="dot"></span> Live статистики</div>
         <table class="stats-table" id="stats-table"></table>
     </div>
 
     <!-- EVENTS FEED -->
     <div class="card" id="card-events" style="display:none">
-        <div class="card-label"><span class="dot"></span> Match Events</div>
+        <div class="card-label"><span class="dot"></span> Събития в мача</div>
         <div class="events-feed" id="events-feed">
-            <div class="no-events">No events yet</div>
+            <div class="no-events">Все още няма събития</div>
         </div>
     </div>
 
@@ -1283,15 +1321,93 @@ function showCards() {
 }
 
 /* =========================================================
+   STATUS + HEALTH
+   ========================================================= */
+function statusLabel(status, statusShort) {
+    const short = (statusShort || "").toUpperCase();
+    const mapShort = {
+        NS: "Преди старт", "1H": "Първо полувреме", HT: "Полувреме",
+        "2H": "Второ полувреме", FT: "Край", AET: "След продължения",
+        PEN: "Дузпи", LIVE: "На живо",
+    };
+    if (mapShort[short]) return mapShort[short];
+
+    const sl = (status || "").toLowerCase();
+    if (sl.includes("not started") || sl.includes("scheduled")) return "Преди старт";
+    if (sl.includes("first half"))  return "Първо полувреме";
+    if (sl.includes("half time") || sl === "halftime") return "Полувреме";
+    if (sl.includes("second half")) return "Второ полувреме";
+    if (sl.includes("match finished") || sl.includes("full time")) return "Край";
+    if (sl.includes("extra time"))  return "Продължения";
+    if (sl.includes("penalt"))      return "Дузпи";
+    if (sl.includes("live") || sl.includes("progress")) return "На живо";
+    return status || "—";
+}
+
+function isHalftimeOrAfter(status, statusShort) {
+    const short = (statusShort || "").toUpperCase();
+    const sl = (status || "").toLowerCase();
+    return ["HT", "2H", "FT", "AET", "PEN"].includes(short)
+        || sl.includes("half time") || sl.includes("second half")
+        || sl.includes("match finished") || sl.includes("full time");
+}
+
+let _wsConnected = false;
+
+function setHealthDot(id, state) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = "health-dot " + (state === "ok" ? "health-ok" : state === "err" ? "health-err" : "health-warn");
+}
+
+function renderHealth(data) {
+    setHealthDot("health-ws-dot", _wsConnected ? "ok" : "err");
+    setText("health-ws-text", _wsConnected ? "Свързан" : "Прекъсната връзка");
+
+    const health = data?.meta?.health;
+    const apiWrap = document.getElementById("health-api-wrap");
+    const pollWrap = document.getElementById("health-poll-wrap");
+
+    if (!health || !state.selectedId) {
+        if (apiWrap) apiWrap.style.display = "none";
+        if (pollWrap) pollWrap.style.display = "none";
+        return;
+    }
+
+    if (apiWrap) apiWrap.style.display = "flex";
+    if (pollWrap) pollWrap.style.display = "flex";
+
+    const apiOk = health.api_ok === true;
+    setHealthDot("health-api-dot", apiOk ? "ok" : "warn");
+    const realData = data?.meta?.real_data === true;
+    setText("health-api-text", apiOk
+        ? (realData ? "API: live данни" : "API: без live stats")
+        : "API: няма отговор");
+
+    if (health.last_poll_at) {
+        const ago = Math.max(0, Math.round((Date.now() - new Date(health.last_poll_at).getTime()) / 1000));
+        setText("health-poll-text", `Обновено: преди ${ago} сек`);
+    } else {
+        setText("health-poll-text", "Обновено: —");
+    }
+
+    if (health.last_error) {
+        setText("health-api-text", `API грешка: ${health.last_error.slice(0, 40)}`);
+        setHealthDot("health-api-dot", "err");
+    }
+}
+
+/* =========================================================
    HEADER
    ========================================================= */
 function renderHeader(match, data) {
     const tac     = data.tactical || {};
     const minute  = data.match?.minute || match.minute;
     const status  = data.match?.status || match.status || "";
+    const statusShort = data.match?.status_short || match.status_short || "";
 
-    setText("home-name", match.home || data.match?.home || "Home");
-    setText("away-name", match.away || data.match?.away || "Away");
+    setText("home-name", match.home || data.match?.home || "Домакин");
+    setText("away-name", match.away || data.match?.away || "Гост");
     setText("competition", match.competition || data.match?.competition || "");
     setText("home-formation", tac.home_formation ? `[${tac.home_formation}]` : "");
     setText("away-formation", tac.away_formation ? `[${tac.away_formation}]` : "");
@@ -1322,12 +1438,14 @@ function renderHeader(match, data) {
     }
 
     const badge = document.getElementById("status-badge");
-    const sl = status.toLowerCase();
-    badge.textContent = status || "—";
+    const label = statusLabel(status, statusShort);
+    const sl = (status + " " + statusShort).toLowerCase();
+    badge.textContent = label;
     badge.className = "match-status-badge " + (
-        sl.includes("progress") || sl === "1h" || sl === "2h" || sl === "ht"
+        sl.includes("progress") || sl.includes("1h") || sl.includes("2h") || sl.includes("ht")
+        || sl.includes("полувреме") || sl.includes("live") || label === "На живо"
             ? "status-live"
-        : sl.includes("full") || sl === "ft"
+        : sl.includes("full") || sl.includes("ft") || sl.includes("край") || label === "Край"
             ? "status-ft"
             : "status-ns"
     );
@@ -1343,8 +1461,8 @@ function hasLiveStats(data) {
 function renderMomentum(data) {
     const card   = document.getElementById("card-momentum");
     const m      = data.momentum || {};
-    const home   = data.match?.home || "Home";
-    const away   = data.match?.away || "Away";
+    const home   = data.match?.home || "Домакин";
+    const away   = data.match?.away || "Гост";
     const isReal = m.data_source === "real";
 
     if (!isReal) {
@@ -1358,8 +1476,8 @@ function renderMomentum(data) {
 
     setText("home-momentum-pct", homeP.toFixed(1) + "%");
     setText("away-momentum-pct", awayP.toFixed(1) + "%");
-    setText("home-trend", m.home_trend || "➡ Stable");
-    setText("away-trend", m.away_trend || "➡ Stable");
+    setText("home-trend", m.home_trend || "➡ Стабилно");
+    setText("away-trend", m.away_trend || "➡ Стабилно");
     setText("window-label", (m.window_minutes || 8) + " min window");
 
     document.getElementById("bar-home").style.width = homeP + "%";
@@ -1415,7 +1533,7 @@ function renderKeyMoments(data) {
     if (card) card.style.display = "block";
 
     if (!moments.length) {
-        el.innerHTML = `<div class="no-moments">No significant moments detected</div>`;
+        el.innerHTML = `<div class="no-moments">Няма значими моменти</div>`;
         return;
     }
 
@@ -1437,8 +1555,8 @@ function renderKeyMoments(data) {
 function renderTactical(data) {
     const card  = document.getElementById("card-tactical");
     const tac   = data.tactical || {};
-    const home  = data.match?.home || "Home";
-    const away  = data.match?.away || "Away";
+    const home  = data.match?.home || "Домакин";
+    const away  = data.match?.away || "Гост";
     const hForm = tac.home_formation || "";
     const aForm = tac.away_formation || "";
     const hSty  = tac.home_styles || [];
@@ -1480,11 +1598,11 @@ function renderTactical(data) {
    LIVE STATS TABLE
    ========================================================= */
 const STAT_ROWS = [
-    { label: "Possession",   keyH: "home_possession",      keyA: "away_possession",      suffix: "%"  },
-    { label: "Shots",        keyH: "home_shots",           keyA: "away_shots",           suffix: ""   },
-    { label: "On Target",    keyH: "home_shots_on_target", keyA: "away_shots_on_target", suffix: ""   },
+    { label: "Владение",     keyH: "home_possession",      keyA: "away_possession",      suffix: "%"  },
+    { label: "Удари",        keyH: "home_shots",           keyA: "away_shots",           suffix: ""   },
+    { label: "В рамките",    keyH: "home_shots_on_target", keyA: "away_shots_on_target", suffix: ""   },
     { label: "xG",           keyH: "home_xg",              keyA: "away_xg",              suffix: ""   },
-    { label: "Danger. Att.", keyH: "home_dangerous",       keyA: "away_dangerous",       suffix: ""   },
+    { label: "Опасни атаки", keyH: "home_dangerous",       keyA: "away_dangerous",       suffix: ""   },
 ];
 
 function renderStats(data) {
@@ -1524,7 +1642,7 @@ function renderStats(data) {
         </tr>`;
     }).join("");
 
-    el.innerHTML = rows || `<tr><td colspan="3" style="color:var(--muted);font-size:13px;padding:8px">No stats available</td></tr>`;
+    el.innerHTML = rows || `<tr><td colspan="3" style="color:var(--muted);font-size:13px;padding:8px">Няма налични статистики</td></tr>`;
 }
 
 /* =========================================================
@@ -1914,11 +2032,11 @@ function renderTableImpact(data) {
 function renderHalftimeAnalysis(data) {
     const htText = data.halftime_analysis || "";
     const status = data.match?.status || "";
+    const statusShort = data.match?.status_short || "";
     const card   = document.getElementById("card-halftime");
     if (!card) return;
 
-    // Show only during HT or 2H (keep visible second half)
-    if (!htText || (status !== "HT" && status !== "2H" && status !== "FT")) {
+    if (!htText || !isHalftimeOrAfter(status, statusShort)) {
         card.style.display = "none";
         return;
     }
@@ -2275,6 +2393,7 @@ function update(data) {
         renderTactical(data);
         renderStats(data);
         renderEvents(data);
+        renderHealth(data);
     }
 
     renderMatches(state.filtered.length ? state.filtered : state.all);
@@ -2288,10 +2407,22 @@ let socket;
 function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     socket = new WebSocket(`${proto}://${location.host}/ws`);
+    socket.onopen = () => {
+        _wsConnected = true;
+        renderHealth(state.lastData);
+    };
     socket.onmessage = e => {
         try { update(JSON.parse(e.data)); } catch (err) { console.error(err); }
     };
-    socket.onclose = () => setTimeout(connect, 2000);
+    socket.onclose = () => {
+        _wsConnected = false;
+        renderHealth(state.lastData);
+        setTimeout(connect, 2000);
+    };
+    socket.onerror = () => {
+        _wsConnected = false;
+        renderHealth(state.lastData);
+    };
 }
 
 connect();
