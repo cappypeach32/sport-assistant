@@ -1,0 +1,25 @@
+[Unit]
+Description=AI Sports Broadcast Assistant (FastAPI)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/ai-sports-assistant
+EnvironmentFile=/opt/ai-sports-assistant/.env
+ExecStart=/opt/ai-sports-assistant/venv/bin/python /opt/ai-sports-assistant/run.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Hardening (keep writable paths minimal)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ai-sports-assistant
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

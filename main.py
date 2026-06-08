@@ -1,6 +1,11 @@
 from datetime import datetime, timezone
 import asyncio
 from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader
