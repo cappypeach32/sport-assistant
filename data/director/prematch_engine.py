@@ -27,7 +27,9 @@ if _gpt_available:
 else:
     _gpt_client = None
 
-CACHE_TTL     = 120   # 2 мин за pre-match данни — paid plan: up from 5 min
+CACHE_TTL     = 120   # 2 мин за rule-based pre-match данни
+CACHE_TTL_GPT = 3600  # 1 час когато GPT guide вече е готов
+GPT_NARRATIVE_TTL = 6 * 3600  # 6 часа — цял broadcast ден без повторно генериране
 
 
 # --------------------------------------------------
@@ -146,6 +148,30 @@ class PreMatchEngine:
         self._cache:       dict = {}   # fixture_id → editorial dict
         self._gpt_ts:      dict = {}   # fixture_id → last GPT call ts
         self._raw_cache:   dict = {}   # general data cache
+        self._gpt_narrative_cache: dict = {}  # fixture_id → {ts, text}
+
+    def _cache_ttl_for(self, result: dict) -> int:
+        data = result.get("data", {}) if isinstance(result.get("data"), dict) else {}
+        if data.get("gpt_narrative"):
+            return CACHE_TTL_GPT
+        return CACHE_TTL
+
+    def _get_cached_narrative(self, fixture_id: int) -> str:
+        cached = self._gpt_narrative_cache.get(fixture_id)
+        if cached and time.time() - cached["ts"] < GPT_NARRATIVE_TTL:
+            return cached.get("text", "") or ""
+        return ""
+
+    def _store_narrative_cache(self, fixture_id: int, text: str) -> None:
+        if text:
+            self._gpt_narrative_cache[fixture_id] = {"ts": time.time(), "text": text}
+
+    def _apply_cached_narrative(self, fixture_id: int, data: dict) -> None:
+        if data.get("gpt_narrative"):
+            return
+        cached = self._get_cached_narrative(fixture_id)
+        if cached:
+            data["gpt_narrative"] = cached
 
     # --------------------------------------------------
     # API HELPERS
@@ -823,6 +849,10 @@ class PreMatchEngine:
         if not _gpt_available or _gpt_client is None:
             return ""
 
+        cached_narr = self._get_cached_narrative(fixture_id)
+        if cached_narr:
+            return cached_narr
+
         # CRITICAL: never call GPT without real data — prevents hallucination
         if not self._has_real_data(data):
             print(f"[PREMATCH] Skipping GPT — no real data available for fixture {fixture_id}")
@@ -960,19 +990,15 @@ H2H — последни срещи:
 • {away}: [конкретна слабост]
 
 ## ГОВОРНИ ТОЧКИ ЗА СТРИЙМА
-(7 теми — конкретни, базирани на данните, с достатъчно контекст за 2-3 минути дискусия)
-1. **[Тема]**: [3-4 изречения с контекст, числа и мнение]
-2. **[Тема]**: [3-4 изречения с контекст, числа и мнение]
-3. **[Тема]**: [3-4 изречения с контекст, числа и мнение]
-4. **[Тема]**: [3-4 изречения с контекст, числа и мнение]
-5. **[Тема]**: [3-4 изречения с контекст, числа и мнение]
-6. **[Тема]**: [3-4 изречения с контекст, числа и мнение]
-7. **[Тема]**: [3-4 изречения с контекст, числа и мнение]
+(5 теми — конкретни, базирани на данните, с контекст за 1-2 минути дискусия)
+1. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
+2. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
+3. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
+4. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
+5. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
 
 ## ИСТОРИЧЕСКИ ФАКТИ
-(7-8 конкретни факта от H2H и статистиката — само реални данни от по-горе)
-• [факт с конкретни числа]
-• [факт с конкретни числа]
+(5 конкретни факта от H2H и статистиката — само реални данни от по-горе)
 • [факт с конкретни числа]
 • [факт с конкретни числа]
 • [факт с конкретни числа]
@@ -994,11 +1020,12 @@ H2H — последни срещи:
             resp = _gpt_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=3500,
+                max_tokens=2400,
                 temperature=0.72,
             )
             narrative = resp.choices[0].message.content.strip()
             self._gpt_ts[fixture_id] = now
+            self._store_narrative_cache(fixture_id, narrative)
             print(f"[PREMATCH] GPT editorial generated for fixture {fixture_id}")
             return narrative
         except Exception as e:
@@ -1475,14 +1502,29 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
     # MAIN PIPELINE
     # --------------------------------------------------
 
+    def get_cached_prematch(self, fixture_id: int) -> dict | None:
+        """Return cached prematch result if still valid (incl. long-lived GPT cache)."""
+        cached = self._cache.get(fixture_id)
+        if not cached:
+            return None
+        if time.time() - cached["ts"] >= self._cache_ttl_for(cached["data"]):
+            return None
+        result = cached["data"]
+        data = result.get("data", {})
+        self._apply_cached_narrative(fixture_id, data)
+        return result
+
     def analyze_fast(self, fixture_id: int, match: dict) -> dict:
         """
         Phase 1: rule-based analysis only (no GPT). Fast — ~2-3 seconds.
         Broadcasts immediately so user sees data quickly.
         """
         cached = self._cache.get(fixture_id)
-        if cached and time.time() - cached["ts"] < CACHE_TTL:
-            return cached["data"]
+        if cached and time.time() - cached["ts"] < self._cache_ttl_for(cached["data"]):
+            result = cached["data"]
+            data = result.get("data", {})
+            self._apply_cached_narrative(fixture_id, data)
+            return result
 
         print(f"[PREMATCH] Analyzing fixture {fixture_id}...")
 
@@ -1530,8 +1572,9 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             top_scorers=top_scorers, coaches=coaches,
             referee=referee, injuries=injuries,
         )
+        self._apply_cached_narrative(fixture_id, data)
 
-        # No GPT here — that's Phase 2
+        # No GPT here — that's Phase 2 (unless narrative restored from cache)
         result = {"available": True, "data": data, "meta": meta}
         self._cache[fixture_id] = {"ts": time.time(), "data": result}
 
@@ -1554,9 +1597,11 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         result = cached["data"]
         data   = result.get("data", {})
 
-        # Skip if narrative already exists
+        self._apply_cached_narrative(fixture_id, data)
         if data.get("gpt_narrative"):
-            return None
+            result["data"] = data
+            self._cache[fixture_id] = {"ts": time.time(), "data": result}
+            return result
 
         narrative = self._generate_gpt_editorial(fixture_id, data)
         if not narrative:
@@ -1574,8 +1619,11 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         Cached per fixture for 5 minutes.
         """
         cached = self._cache.get(fixture_id)
-        if cached and time.time() - cached["ts"] < CACHE_TTL:
-            return cached["data"]
+        if cached and time.time() - cached["ts"] < self._cache_ttl_for(cached["data"]):
+            result = cached["data"]
+            data = result.get("data", {})
+            self._apply_cached_narrative(fixture_id, data)
+            return result
 
         print(f"[PREMATCH] Analyzing fixture {fixture_id}...")
 
@@ -1624,8 +1672,8 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             referee=referee, injuries=injuries,
         )
 
-        # GPT broadcast guide (if key available)
-        if _gpt_available:
+        self._apply_cached_narrative(fixture_id, data)
+        if _gpt_available and not data.get("gpt_narrative"):
             data["gpt_narrative"] = self._generate_gpt_editorial(fixture_id, data)
 
         result = {"available": True, "data": data, "meta": meta}

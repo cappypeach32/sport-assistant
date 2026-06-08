@@ -1104,6 +1104,8 @@ let state = {
     lastData:     null,
     activeTab:    "date",   // "date" | "upcoming"
     selectedDate: null,     // active date chip filter
+    prematchByFixture: {}, // client cache — instant restore when re-selecting matches
+    overlayByFixture: {},  // last full payload per fixture
 };
 
 function getId(m) {
@@ -1286,26 +1288,55 @@ function buildMap(list) {
 function selectMatch(id) {
     const match = state.map[id];
     if (!match) return;
+
+    const sameMatch = state.selectedId === id;
+    const cachedOverlay = state.overlayByFixture[id];
+    const cachedPrematch = state.prematchByFixture[id];
     state.selectedId = id;
     _lastPhase = "";
-    _prematchRenderedKey = "";
+
     renderMatches(state.filtered.length ? state.filtered : state.all);
+
+    document.getElementById("waiting-state").style.display  = "none";
+    document.getElementById("card-header").style.display    = "block";
+    document.getElementById("card-prematch").style.display  = "block";
+
+    if (!sameMatch) {
+        _prematchRenderedKey = "";
+        const postC = document.getElementById("postmatch-sections");
+        if (postC) { postC.innerHTML = ""; delete postC.dataset.rendered; }
+        const htC = document.getElementById("halftime-sections");
+        if (htC) { htC.innerHTML = ""; delete htC.dataset.rendered; }
+    }
+
+    if (cachedOverlay) {
+        update(cachedOverlay);
+    } else if (cachedPrematch) {
+        const stub = {
+            type: "LIVE_UPDATE",
+            phase: "prematch",
+            match: { ...match, home: match.home, away: match.away, raw_id: match.raw_id },
+            prematch: cachedPrematch,
+            meta: { real_data: false },
+        };
+        renderHeader(match, stub);
+        renderPrematch(stub);
+        renderHealth(stub);
+    } else {
+        _prematchRenderedKey = "";
+        setText("prematch-toggle-text", "Зареждане на анализа...");
+        renderHeader(match, {});
+    }
+
+    if (sameMatch && cachedPrematch?.gpt_narrative) {
+        return;
+    }
+
     fetch("/select-match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ match })
     });
-    // Reset rendered flags for postmatch/halftime so new match gets fresh content
-    const postC = document.getElementById("postmatch-sections");
-    if (postC) { postC.innerHTML = ""; delete postC.dataset.rendered; }
-    const htC = document.getElementById("halftime-sections");
-    if (htC) { htC.innerHTML = ""; delete htC.dataset.rendered; }
-    // Show header immediately, prematch card shows "loading"
-    document.getElementById("waiting-state").style.display  = "none";
-    document.getElementById("card-header").style.display    = "block";
-    document.getElementById("card-prematch").style.display  = "block";
-    setText("prematch-toggle-text", "Зареждане на анализа...");
-    renderHeader(match, {});
 }
 
 /* =========================================================
@@ -2236,7 +2267,7 @@ function renderPrematch(data) {
                 <div class="loading-spinner"></div>
                 <div>
                     <div style="font-size:14px;font-weight:700;color:var(--purple);margin-bottom:3px">AI Broadcast Guide се генерира...</div>
-                    <div style="font-size:12px;color:var(--muted)">Анализиране на статистики, форма и контекст — обикновено 5-10 секунди</div>
+                    <div style="font-size:12px;color:var(--muted)">Първият път ~15-30 сек. След това се кешира — повторен избор е мигновен.</div>
                 </div>
             </div>
         </div>`}
@@ -2383,6 +2414,10 @@ function update(data) {
 
     state.map[id]  = m;
     state.lastData = data;
+    state.overlayByFixture[id] = data;
+    if (data.prematch?.available) {
+        state.prematchByFixture[id] = data.prematch;
+    }
 
     if (!state.selectedId || state.selectedId === id) {
         const phase = data.phase || "live";

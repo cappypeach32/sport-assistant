@@ -952,37 +952,62 @@ async def select_match(request: Request):
     match = data.get("match")
 
     global latest_halftime, latest_postmatch, latest_commentary, _last_goal_count, _last_ht_status, _last_ft_status
-    active_match        = match
-    latest_intelligence = {}
-    latest_prematch     = {}
-    latest_narrative    = ""
-    latest_halftime     = ""
-    latest_postmatch    = ""
-    latest_commentary   = []
-    _last_goal_count    = 0
-    _last_ht_status     = ""
-    _last_ft_status     = ""
 
-    # Clear caches so GPT always runs fresh on new match selection
-    if match and match.get("raw_id"):
-        fid = match["raw_id"]
-        prematch_engine._cache.pop(fid, None)
-        prematch_engine._gpt_ts.pop(fid, None)
-        tactical_engine._last_call_ts.pop(fid, None)
+    old_fid = active_match.get("raw_id") if active_match else None
+    new_fid = match.get("raw_id") if match else None
+    same_match = bool(new_fid and new_fid == old_fid)
+
+    active_match = match
+
+    if not same_match:
+        latest_intelligence = {}
+        latest_narrative    = ""
+        latest_halftime     = ""
+        latest_postmatch    = ""
+        latest_commentary   = []
+        _last_goal_count    = 0
+        _last_ht_status     = ""
+        _last_ft_status     = ""
+        latest_prematch     = {}
+        if old_fid:
+            tactical_engine._last_call_ts.pop(old_fid, None)
 
     if active_match:
         fixture_id  = active_match.get("raw_id")
-        match_phase = get_match_phase(active_match)
+        cached_pm   = None
 
-        # Broadcast an immediate "loading" state so overlay responds instantly
-        loading_payload = build_overlay_response(active_match, prematch={"available": False})
-        loading_payload["halftime_analysis"] = ""
-        loading_payload["postmatch_summary"] = ""
-        loading_payload["commentary_queue"]  = []
-        await broadcast(loading_payload)
-
-        # Pre-match analysis starts in background — does NOT block select-match response
         if fixture_id:
+            cached_pm = prematch_engine.get_cached_prematch(fixture_id)
+
+        if same_match and latest_prematch.get("available"):
+            cached_pm = latest_prematch
+        elif cached_pm and cached_pm.get("available"):
+            latest_prematch = cached_pm
+
+        if cached_pm and cached_pm.get("available"):
+            payload = build_overlay_response(
+                active_match,
+                intelligence=latest_intelligence or {},
+                prematch=latest_prematch,
+                live_narrative=latest_narrative,
+            )
+            payload["halftime_analysis"] = latest_halftime
+            payload["postmatch_summary"] = latest_postmatch
+            payload["commentary_queue"]  = latest_commentary
+            await broadcast(payload)
+
+            pm_data = cached_pm.get("data", {})
+            if pm_data.get("gpt_narrative"):
+                return {"success": True, "active_match": active_match, "cached": True}
+
+        else:
+            loading_payload = build_overlay_response(active_match, prematch={"available": False})
+            loading_payload["halftime_analysis"] = ""
+            loading_payload["postmatch_summary"] = ""
+            loading_payload["commentary_queue"]  = []
+            await broadcast(loading_payload)
+
+        if fixture_id and not (cached_pm and cached_pm.get("data", {}).get("gpt_narrative")):
             asyncio.create_task(_load_prematch_async(fixture_id, active_match))
 
     return {
@@ -995,21 +1020,41 @@ async def _load_prematch_async(fixture_id: int, match: dict):
     """
     Async task: runs prematch analysis in two phases for fast UI response.
     Phase 1: rule-based data (fast ~2-3s) → broadcast immediately
-    Phase 2: GPT narrative (slow ~5-8s) → broadcast update when ready
+    Phase 2: GPT narrative (slow ~15-30s) → broadcast update when ready
     """
     global latest_prematch
+    if active_match and active_match.get("raw_id") != fixture_id:
+        return
+
     print(f"[BG] Prematch task started for fixture {fixture_id}")
     try:
         loop = asyncio.get_running_loop()
 
-        # Phase 1: fast rule-based analysis (skip GPT)
+        cached = prematch_engine.get_cached_prematch(fixture_id)
+        if cached and cached.get("available") and cached.get("data", {}).get("gpt_narrative"):
+            latest_prematch = cached
+            print(f"[BG] Prematch cache hit (with GPT) for fixture {fixture_id}")
+            payload = build_overlay_response(
+                match,
+                intelligence=latest_intelligence or {},
+                prematch=latest_prematch,
+                live_narrative=latest_narrative,
+            )
+            payload["halftime_analysis"] = latest_halftime
+            payload["postmatch_summary"] = latest_postmatch
+            payload["commentary_queue"]  = latest_commentary
+            await broadcast(payload)
+            return
+
         result = await loop.run_in_executor(
             None, prematch_engine.analyze_fast, fixture_id, match
         )
+        if active_match and active_match.get("raw_id") != fixture_id:
+            return
+
         latest_prematch = result
         print(f"[BG] Phase 1 (rule-based) complete for fixture {fixture_id} — broadcasting")
 
-        # Broadcast rule-based data immediately
         payload = build_overlay_response(
             match,
             intelligence=latest_intelligence or {},
@@ -1021,10 +1066,16 @@ async def _load_prematch_async(fixture_id: int, match: dict):
         payload["commentary_queue"]  = latest_commentary
         await broadcast(payload)
 
-        # Phase 2: GPT narrative (runs in background, updates when ready)
+        if result.get("data", {}).get("gpt_narrative"):
+            print(f"[BG] GPT narrative restored from cache for fixture {fixture_id}")
+            return
+
         gpt_result = await loop.run_in_executor(
             None, prematch_engine.generate_gpt_phase, fixture_id
         )
+        if active_match and active_match.get("raw_id") != fixture_id:
+            return
+
         if gpt_result:
             latest_prematch = gpt_result
             print(f"[BG] Phase 2 (GPT) complete for fixture {fixture_id} — broadcasting update")
