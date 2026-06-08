@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>World Cup 2026 - Live Dashboard</title>
+
+<style>
+body {
+    margin: 0;
+    font-family: Arial;
+    background: #0b0f1a;
+    color: white;
+}
+
+/* TOP BAR */
+.topbar {
+    background: #111827;
+    padding: 14px;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+/* GRID */
+.grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 12px;
+    padding: 12px;
+}
+
+/* CARD */
+.card {
+    background: #111827;
+    border-radius: 12px;
+    padding: 12px;
+}
+
+/* LIVE MATCH */
+.big-match {
+    font-size: 22px;
+    font-weight: bold;
+}
+
+/* TABLE */
+table {
+    width: 100%;
+    font-size: 13px;
+}
+
+td, th {
+    padding: 6px;
+    text-align: left;
+}
+
+/* TICKER */
+.ticker {
+    position: fixed;
+    bottom: 0;
+    width: 100%;
+    background: #111827;
+    padding: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.ticker span {
+    display: inline-block;
+    padding-left: 100%;
+    animation: scroll 12s linear infinite;
+}
+
+@keyframes scroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-100%); }
+}
+</style>
+</head>
+
+<body>
+
+<div class="topbar">
+    🏆 FIFA WORLD CUP 2026 - LIVE BROADCAST SYSTEM
+</div>
+
+<div class="grid">
+
+    <!-- LIVE MATCH CENTER -->
+    <div class="card">
+        <div class="big-match" id="matchTitle">Loading...</div>
+        <div id="matchInsight"></div>
+        <hr>
+        <div id="prediction"></div>
+    </div>
+
+    <!-- GROUP TABLE -->
+    <div class="card">
+        <h3>Group Table</h3>
+        <table>
+            <tr><th>Group A</th><th>Pts</th></tr>
+            <tr><td>Brazil</td><td>6</td></tr>
+            <tr><td>Germany</td><td>4</td></tr>
+        </table>
+    </div>
+
+</div>
+
+<!-- UPCOMING TICKER -->
+<div class="ticker">
+    <span id="tickerText">Loading upcoming matches...</span>
+</div>
+
+<script>
+async function updateData() {
+
+    const res = await fetch("/overlay-data?team1=Brazil&team2=Germany");
+    const data = await res.json();
+
+    // MATCH TITLE
+    document.getElementById("matchTitle").innerText = data.title;
+
+    // INSIGHT
+    document.getElementById("matchInsight").innerText =
+        data.summary.text;
+
+    // PREDICTION
+    const p = data.prediction;
+    const keys = Object.keys(p);
+
+    document.getElementById("prediction").innerText =
+        keys.map(k => k + ": " + p[k] + "%").join(" | ");
+
+    // TICKER (STATIC FOR NOW)
+    document.getElementById("tickerText").innerText =
+        "Next: Argentina vs France | England vs Spain | Brazil vs Germany";
+
+}
+
+setInterval(updateData, 3000);
+updateData();
+</script>
+
+</body>
+</html>

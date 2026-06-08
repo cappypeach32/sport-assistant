@@ -1,0 +1,952 @@
+from datetime import datetime, timezone
+import asyncio
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi.responses import HTMLResponse
+from jinja2 import Environment, FileSystemLoader
+
+from data.director.sport_service import get_fixtures
+from data.director.match_selection_engine import MatchSelectionEngine
+from data.director.live_match_engine import LiveMatchEngine
+from data.director.event_engine import MatchEventEngine
+
+# Phase 1 — AI Match Intelligence
+from data.director.live_stats_collector import LiveStatsCollector
+from data.director.momentum_engine import MomentumEngine
+from data.director.key_moments_detector import KeyMomentsDetector
+from data.director.tactical_engine import TacticalEngine
+
+# Phase 2 — Pre-Match Editorial + Live Narrative
+from data.director.prematch_engine import PreMatchEngine, _is_live, _is_ns
+
+# Phase 3 — Live Win Probability
+from data.director.win_probability import calculate as calc_win_prob
+
+
+# =====================================================
+# APP INIT
+# =====================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start loop on startup, cancel it cleanly on shutdown (prevents zombie loops with --reload)."""
+    task = asyncio.create_task(live_stats_loop())
+    print("[STARTUP] AI Match Intelligence v3.0 — Phase 1 active")
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(
+    title="AI Sports Broadcast Assistant",
+    version="3.0.0",
+    lifespan=lifespan,
+)
+
+jinja_env = Environment(
+    loader=FileSystemLoader("templates"),
+    auto_reload=True
+)
+
+# Legacy engines (kept for fallback / non-live matches)
+match_selector = MatchSelectionEngine()
+live_engine    = LiveMatchEngine()
+event_engine   = MatchEventEngine()
+
+# Phase 1 engines
+stats_collector  = LiveStatsCollector()
+momentum_engine  = MomentumEngine()
+moments_detector = KeyMomentsDetector()
+tactical_engine  = TacticalEngine()
+
+# Phase 2 engine
+prematch_engine  = PreMatchEngine()
+
+
+# =====================================================
+# GLOBAL STATE
+# =====================================================
+
+active_match: dict | None = None
+clients: set = set()
+state_lock = asyncio.Lock()
+
+# Phase 1 — latest real intelligence (updated by background loop)
+latest_intelligence: dict = {}
+
+# Phase 2 — latest pre-match editorial + live narrative + half-time
+latest_prematch:   dict = {}
+latest_narrative:  str  = ""
+latest_halftime:   str  = ""
+latest_postmatch:    str   = ""
+latest_commentary:   list  = []   # list of { minute, title, text }
+_last_ht_status:     str   = ""
+_last_ft_status:     str   = ""
+_last_goal_count:    int   = 0    # detect goals for forced commentary refresh
+
+
+# =====================================================
+# BROADCAST
+# =====================================================
+
+async def broadcast(payload: dict):
+    dead = []
+    for ws in clients:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.append(ws)
+    for d in dead:
+        clients.discard(d)
+
+
+# =====================================================
+# MATCH CLOCK (simulated fallback)
+# =====================================================
+
+match_minute = 1
+
+
+def get_simulated_minute() -> int:
+    global match_minute
+    match_minute = (match_minute % 90) + 1
+    return match_minute
+
+
+# =====================================================
+# SAFE LIVE NORMALIZER
+# =====================================================
+
+def safe_live_state(state: dict) -> dict:
+    state = state or {}
+    return {
+        "tempo":        state.get("tempo")        or "medium",
+        "pressure":     state.get("pressure")     or "balanced",
+        "dominance":    state.get("dominance")    or "neutral",
+        "momentum":     state.get("momentum")     or "Balanced",
+        "live_summary": state.get("live_summary") or "Очакване на старт",
+        "match_flow":   state.get("match_flow")   or "Предмачово състояние",
+    }
+
+
+# =====================================================
+# UI STATE
+# =====================================================
+
+def build_ui_state(momentum: dict, live_state: dict) -> dict:
+    hm = momentum.get("home_momentum_pct", 50)
+    am = momentum.get("away_momentum_pct", 50)
+    swing = abs(hm - am)
+
+    tempo = str(live_state.get("tempo", "")).lower()
+
+    ui_theme = "balanced"
+    if swing > 30:
+        ui_theme = "dominant"
+    if "fast" in tempo or "explosive" in tempo:
+        ui_theme = "high_tempo"
+    if swing > 40:
+        ui_theme = "explosive"
+
+    return {
+        "theme": ui_theme,
+        "animations": {
+            "pulse": ui_theme in ["explosive", "high_tempo"],
+            "glow":  ui_theme in ["dominant", "explosive"],
+        },
+    }
+
+
+# =====================================================
+# MATCH PHASE DETECTION
+# =====================================================
+
+LIVE_STATUSES = {
+    "First Half", "Second Half", "Half Time",
+    "Extra Time", "Break Time", "Penalty In Progress",
+    "Live", "In Progress"
+}
+NS_STATUSES = {"Not Started", "Time To Be Defined", "Scheduled"}
+
+def get_match_phase(match: dict) -> str:
+    """Returns 'prematch' | 'live' | 'finished'"""
+    status = (match.get("status") or "").strip()
+    if status in LIVE_STATUSES:
+        return "live"
+    if status in NS_STATUSES:
+        return "prematch"
+    if "Full Time" in status or "Finished" in status or status in {"FT", "AET", "PEN"}:
+        return "finished"
+    # fallback: check short status via live fixture
+    return "prematch"
+
+
+# =====================================================
+# PHASE 1 — LIVE INTELLIGENCE BUILDER
+# =====================================================
+
+def build_live_intelligence(match: dict, minute: int) -> dict:
+    """
+    Pulls real stats, calculates momentum, detects key moments,
+    and runs tactical analysis for a live fixture.
+
+    Falls back gracefully when stats are unavailable (pre-match,
+    no xG data, etc.).
+    """
+    fixture_id = match.get("raw_id")
+    home = match.get("home", "Home")
+    away = match.get("away", "Away")
+
+    if not fixture_id:
+        return {"available": False}
+
+    # --- Real stats ---
+    stats = stats_collector.get_live_stats(fixture_id)
+    lineups = stats_collector.get_lineups(fixture_id)
+
+    # Consider stats valid if the API returned team names (even if numeric values are 0)
+    has_api_response = bool(stats.get("home_team") or stats.get("away_team"))
+    if not has_api_response:
+        print(f"[INTELLIGENCE] No API response for fixture {fixture_id} — using simulated fallback")
+        return {"available": False}
+
+    print(f"[INTELLIGENCE] Real stats OK — home={stats.get('home_team')} away={stats.get('away_team')} | possession={stats.get('home',{}).get('possession','?')}% vs {stats.get('away',{}).get('possession','?')}% | xG={stats.get('home',{}).get('xg','?')} vs {stats.get('away',{}).get('xg','?')}")
+
+    # --- Momentum ---
+    # Seed with a zero-baseline snapshot so the first real snapshot
+    # immediately produces a meaningful delta (cumulative xG/shots from 0).
+    snaps = momentum_engine._history.get(fixture_id, [])
+    if len(snaps) == 0 and minute > 5:
+        baseline_minute = max(0, minute - momentum_engine.WINDOW_MINUTES)
+        zero_stats = {
+            "home": {k: 0 for k in stats.get("home", {})},
+            "away": {k: 0 for k in stats.get("away", {})},
+        }
+        momentum_engine.add_snapshot(fixture_id, zero_stats, baseline_minute)
+
+    momentum_engine.add_snapshot(fixture_id, stats, minute)
+    momentum = momentum_engine.calculate(fixture_id)
+
+    # --- Key Moments ---
+    key_moments = moments_detector.detect(
+        momentum=momentum,
+        stats=stats,
+        home_team=home,
+        away_team=away,
+        minute=minute,
+    )
+
+    # --- Tactical Analysis ---
+    tactical = tactical_engine.analyze(
+        fixture_id=fixture_id,
+        home_team=home,
+        away_team=away,
+        lineups=lineups,
+        stats=stats,
+        momentum=momentum,
+        minute=minute,
+    )
+
+    return {
+        "available":   True,
+        "stats":       stats,
+        "momentum":    momentum,
+        "key_moments": key_moments,
+        "tactical":    tactical,
+        "lineups":     lineups,
+    }
+
+
+# =====================================================
+# CORE MATCH BUILDER
+# =====================================================
+
+def build_overlay_response(
+    match: dict,
+    intelligence: dict | None = None,
+    prematch: dict | None = None,
+    live_narrative: str = "",
+) -> dict:
+
+    if not match:
+        return {}
+
+    home = match.get("home", "Home")
+    away = match.get("away", "Away")
+
+    # --- Simulated fallback (always available) ---
+    raw_live   = live_engine.generate_live_state(match)
+    live_state = safe_live_state(raw_live)
+
+    match_phase_early = get_match_phase(match)
+    minute = get_simulated_minute() if match_phase_early == "live" else 0
+
+    sim_events = event_engine.generate_event(
+        minute=minute,
+        home_team=home,
+        away_team=away,
+    )
+    sim_momentum = event_engine.update_momentum(
+        home_strength=55,
+        away_strength=45,
+    )
+
+    # --- Phase 1 intelligence (real data, if available) ---
+    intel = intelligence or {}
+    real_available = intel.get("available", False)
+    live_fixture = {}
+
+    if real_available:
+        momentum    = intel.get("momentum", {})
+        key_moments = intel.get("key_moments", [])
+        tactical    = intel.get("tactical", {})
+        stats       = intel.get("stats", {})
+
+        # Real score + minute from API
+        live_fixture = stats_collector.get_live_fixture(match.get("raw_id", 0)) or {}
+        real_minute  = live_fixture.get("minute", 0)
+        if real_minute > 0:
+            minute = real_minute
+    else:
+        momentum     = {"home_momentum_pct": sim_momentum["home"], "away_momentum_pct": sim_momentum["away"]}
+        key_moments  = []
+        tactical     = {}
+        stats        = {}
+
+    ui_state   = build_ui_state(momentum, live_state)
+    match_phase = get_match_phase(match)
+
+    # --- Pre-match editorial ---
+    pm      = prematch or {}
+    pm_data = pm.get("data", {}) if pm.get("available") else {}
+
+    # --- Live goals from fixture data ---
+    live_hg = live_fixture.get("home_goals")
+    live_ag = live_fixture.get("away_goals")
+
+    # --- Live win probability ---
+    win_prob = {}
+    pm_pred = pm_data.get("prediction", {})
+    if match_phase in ("live", "finished") and live_hg is not None and live_ag is not None:
+        home_xg_val = float(stats.get("home", {}).get("xg", 0) or 0)
+        away_xg_val = float(stats.get("away", {}).get("xg", 0) or 0)
+        win_prob = calc_win_prob(
+            home_goals  = int(live_hg or 0),
+            away_goals  = int(live_ag or 0),
+            minute      = minute,
+            pre_home_win= float(pm_pred.get("home_win_pct", 40) or 40),
+            pre_draw    = float(pm_pred.get("draw_pct", 25)     or 25),
+            pre_away_win= float(pm_pred.get("away_win_pct", 35) or 35),
+            home_xg     = home_xg_val,
+            away_xg     = away_xg_val,
+        )
+
+    # --- Live table impact (calculated when score is available) ---
+    table_impact = {}
+    full_table = pm_data.get("full_table", [])
+    pm_meta    = pm.get("meta", {})
+    if full_table and live_hg is not None and live_ag is not None:
+        table_impact = prematch_engine.calculate_table_impact(
+            full_table,
+            home_id    = pm_meta.get("home_id", 0),
+            away_id    = pm_meta.get("away_id", 0),
+            home_goals = live_hg,
+            away_goals = live_ag,
+            home_name  = home,
+            away_name  = away,
+        )
+
+    return {
+        "type":    "LIVE_UPDATE",
+        "success": True,
+        "version": "3.0.0",
+        "phase":   match_phase,
+
+        "match": {
+            "home":        home,
+            "away":        away,
+            "status":      match.get("status"),
+            "competition": match.get("competition"),
+            "minute":      minute,
+            "raw_id":      match.get("raw_id"),
+            "start_time":  match.get("start_time"),
+            "home_goals":  live_fixture.get("home_goals"),
+            "away_goals":  live_fixture.get("away_goals"),
+        },
+
+        "editorial": {
+            "intro":        f"{home} срещу {away}",
+            "live_summary": live_state["live_summary"],
+            "key_factors":  [f"Темпо: {live_state['tempo']}"],
+        },
+
+        # Phase 1 — real momentum
+        "momentum": {
+            "home_pct":           momentum.get("home_momentum_pct", 50),
+            "away_pct":           momentum.get("away_momentum_pct", 50),
+            "home_xg_delta":      momentum.get("home_xg_delta", 0),
+            "away_xg_delta":      momentum.get("away_xg_delta", 0),
+            "home_shots_delta":   momentum.get("home_shots_delta", 0),
+            "away_shots_delta":   momentum.get("away_shots_delta", 0),
+            "home_trend":         momentum.get("home_trend", "➡ Stable"),
+            "away_trend":         momentum.get("away_trend", "➡ Stable"),
+            "dominant_team":      momentum.get("dominant_team", "neutral"),
+            "pressure_spikes":    momentum.get("pressure_spikes", []),
+            "window_minutes":     momentum.get("window_minutes", 8),
+            "data_source":        "real" if real_available else "simulated",
+        },
+
+        # Phase 1 — key moments alerts
+        "key_moments": key_moments[:3],  # top 3 by severity
+
+        # Phase 1 — tactical analysis
+        "tactical": {
+            "home_formation": tactical.get("home_formation", ""),
+            "away_formation": tactical.get("away_formation", ""),
+            "home_styles":    tactical.get("home_tactics", {}).get("active_styles", []),
+            "away_styles":    tactical.get("away_tactics", {}).get("active_styles", []),
+            "narrative":      tactical.get("narrative", ""),
+        },
+
+        # Live stats summary (for overlay display)
+        "live_stats": {
+            "home_possession":      stats.get("home", {}).get("possession", "–"),
+            "away_possession":      stats.get("away", {}).get("possession", "–"),
+            "home_shots":           stats.get("home", {}).get("shots_total", "–"),
+            "away_shots":           stats.get("away", {}).get("shots_total", "–"),
+            "home_shots_on_target": stats.get("home", {}).get("shots_on_target", "–"),
+            "away_shots_on_target": stats.get("away", {}).get("shots_on_target", "–"),
+            "home_xg":              stats.get("home", {}).get("xg", "–"),
+            "away_xg":              stats.get("away", {}).get("xg", "–"),
+            "home_dangerous":       stats.get("home", {}).get("dangerous_attacks", "–"),
+            "away_dangerous":       stats.get("away", {}).get("dangerous_attacks", "–"),
+        },
+
+        # Legacy fields (kept for backward compatibility with overlay.html)
+        "prediction": {
+            "home_win": 45,
+            "away_win": 30,
+            "draw":     25,
+        },
+
+        "raw": {
+            "live_intelligence": {
+                "tempo":          live_state["tempo"],
+                "pressure":       live_state["pressure"],
+                "dominance":      live_state["dominance"],
+                "momentum":       live_state["momentum"],
+                "home_momentum":  momentum.get("home_momentum_pct", sim_momentum.get("home", 50)),
+                "away_momentum":  momentum.get("away_momentum_pct", sim_momentum.get("away", 50)),
+                "minute":         minute,
+            }
+        },
+
+        "events":   sim_events,
+        "ui_state": ui_state,
+
+        # Phase 2 — pre-match editorial
+        "prematch": {
+            "available":       pm.get("available", False),
+            "home_form":       pm_data.get("home_form", ""),
+            "away_form":       pm_data.get("away_form", ""),
+            "home_form_bg":    pm_data.get("home_form_bg", ""),
+            "away_form_bg":    pm_data.get("away_form_bg", ""),
+            "home_stats":      pm_data.get("home_stats", {}),
+            "away_stats":      pm_data.get("away_stats", {}),
+            "home_standing":   pm_data.get("home_standing", {}),
+            "away_standing":   pm_data.get("away_standing", {}),
+            "home_advantages": pm_data.get("home_advantages", []),
+            "away_advantages": pm_data.get("away_advantages", []),
+            "key_factors":     pm_data.get("key_factors", []),
+            "h2h":             pm_data.get("h2h", []),
+            "h2h_home_wins":   pm_data.get("h2h_home_wins", 0),
+            "h2h_away_wins":   pm_data.get("h2h_away_wins", 0),
+            "avg_h2h_goals":   pm_data.get("avg_h2h_goals", 0),
+            "prediction":      pm_data.get("prediction", {}),
+            "gpt_narrative":   pm_data.get("gpt_narrative", ""),
+            "top_scorers":     pm_data.get("top_scorers", {"home": [], "away": []}),
+            "coaches":         pm_data.get("coaches", {}),
+            "referee":         pm_data.get("referee", {}),
+            "injuries":        pm_data.get("injuries", {"home": [], "away": []}),
+        },
+
+        "table_impact":      table_impact,
+        "win_probability":   win_prob,
+        "postmatch_summary": "",   # filled by loop
+        "commentary_queue":  [],   # filled by loop
+
+        # Phase 2 — live narrative (Bulgarian, updated by key moments)
+        "live_narrative": live_narrative,
+        "halftime_analysis": "",  # filled in build_overlay_response caller if available
+
+        "meta": {
+            "mode":          "AI_MATCH_INTELLIGENCE_V3",
+            "real_data":     real_available,
+            "generated_at":  datetime.now(timezone.utc).isoformat(),
+        },
+    }
+
+
+# =====================================================
+# PHASE 1 — BACKGROUND LIVE STATS LOOP
+# =====================================================
+
+POLL_INTERVAL = 20  # seconds — paid plan: up from 45s
+
+
+async def live_stats_loop():
+    """
+    Polls API-Football every 45s for the active match,
+    builds full Phase 1 intelligence, and pushes to all clients.
+    """
+    global _last_ft_status, latest_postmatch, _last_ht_status, latest_halftime, latest_narrative, latest_commentary, _last_goal_count
+    print("[LOOP] Live stats loop started")
+
+    while True:
+        await asyncio.sleep(POLL_INTERVAL)
+
+        if not active_match:
+            continue
+
+        fixture_id = active_match.get("raw_id")
+        if not fixture_id:
+            continue
+
+        try:
+            match_phase = get_match_phase(active_match)
+
+            # For finished matches, stop re-broadcasting once postmatch is ready
+            if match_phase == "finished" and latest_postmatch:
+                continue
+
+            # For prematch, only broadcast once every 60s (no live data changes)
+            if match_phase == "prematch" and latest_prematch.get("available"):
+                await asyncio.sleep(40)  # extra delay on top of POLL_INTERVAL
+
+            # Run sync HTTP call in executor to avoid blocking the event loop
+            loop_ref    = asyncio.get_running_loop()
+            minute_raw  = await loop_ref.run_in_executor(None, stats_collector.get_match_minute, fixture_id)
+            minute      = minute_raw or (get_simulated_minute() if match_phase == "live" else 0)
+            print(f"[LOOP] tick phase={match_phase} fixture={fixture_id} min={minute}")
+            intelligence = {}
+
+            if match_phase == "live":
+                intelligence = build_live_intelligence(active_match, minute)
+                latest_intelligence.update(intelligence)
+
+                # Live narrative after key moments
+                if intelligence.get("available") and intelligence.get("key_moments"):
+                    loop = asyncio.get_running_loop()
+                    narrative = await loop.run_in_executor(
+                        None,
+                        prematch_engine.generate_live_narrative,
+                        fixture_id,
+                        active_match.get("home", ""),
+                        active_match.get("away", ""),
+                        minute,
+                        intelligence.get("momentum", {}),
+                        intelligence.get("key_moments", []),
+                    )
+                    if narrative:
+                        latest_narrative = narrative
+
+            # Post-match summary trigger (FT)
+            if match_phase == "finished" and _last_ft_status != "FT":
+                _last_ft_status = "FT"
+                live_stats_snap = latest_intelligence.get("stats", {})
+                events_snap     = stats_collector._events_cache.get(fixture_id, {}).get("data", [])
+                lf_ft = stats_collector.get_live_fixture(fixture_id)
+                score_h_ft = lf_ft.get("home_goals", 0) or 0
+                score_a_ft = lf_ft.get("away_goals", 0) or 0
+                pm_data_snap = latest_prematch.get("data", {}) if latest_prematch.get("available") else {}
+                loop = asyncio.get_running_loop()
+                ft_text = await loop.run_in_executor(
+                    None,
+                    prematch_engine.generate_postmatch_summary,
+                    fixture_id,
+                    active_match.get("home", ""),
+                    active_match.get("away", ""),
+                    score_h_ft,
+                    score_a_ft,
+                    live_stats_snap,
+                    events_snap,
+                    pm_data_snap,
+                )
+                if ft_text:
+                    latest_postmatch = ft_text
+                    print(f"[POSTMATCH] Summary ready for {active_match.get('home')} vs {active_match.get('away')}")
+            elif match_phase != "finished":
+                _last_ft_status = match_phase
+
+            # Half-time analysis trigger
+            current_status = active_match.get("status", "")
+            if current_status == "HT" and _last_ht_status != "HT":
+                _last_ht_status = "HT"
+                live_stats_snap = latest_intelligence.get("stats", {})
+                events_snap     = stats_collector._events_cache.get(fixture_id, {}).get("data", [])
+                lf = stats_collector.get_live_fixture(fixture_id)
+                score_h = lf.get("home_goals", 0) or 0
+                score_a = lf.get("away_goals", 0) or 0
+                loop = asyncio.get_running_loop()
+                ht_text = await loop.run_in_executor(
+                    None,
+                    prematch_engine.generate_halftime_analysis,
+                    fixture_id,
+                    active_match.get("home", ""),
+                    active_match.get("away", ""),
+                    live_stats_snap,
+                    events_snap,
+                    score_h, score_a,
+                )
+                if ht_text:
+                    latest_halftime = ht_text
+                    print(f"[HALFTIME] Analysis ready for {active_match.get('home')} vs {active_match.get('away')}")
+            elif current_status != "HT":
+                _last_ht_status = current_status
+
+            # Commentary queue — refresh every 5 min or on goal
+            if match_phase == "live" and intelligence.get("available"):
+                events_snap    = stats_collector._events_cache.get(fixture_id, {}).get("data", [])
+                current_goals  = len([e for e in events_snap if e.get("type") == "Goal"])
+                goal_happened  = current_goals > _last_goal_count
+                if goal_happened:
+                    _last_goal_count = current_goals
+                lf_now     = stats_collector.get_live_fixture(fixture_id)
+                score_h_c  = lf_now.get("home_goals", 0) or 0
+                score_a_c  = lf_now.get("away_goals", 0) or 0
+                loop       = asyncio.get_running_loop()
+                new_points = await loop.run_in_executor(
+                    None,
+                    prematch_engine.generate_commentary_queue,
+                    fixture_id,
+                    active_match.get("home", ""),
+                    active_match.get("away", ""),
+                    minute,
+                    score_h_c,
+                    score_a_c,
+                    intelligence.get("stats", {}),
+                    events_snap,
+                    intelligence.get("momentum", {}),
+                    goal_happened,   # force=True when goal scored
+                )
+                if new_points:
+                    latest_commentary = new_points
+
+            payload = build_overlay_response(
+                active_match,
+                intelligence=intelligence,
+                prematch=latest_prematch,
+                live_narrative=latest_narrative,
+            )
+            payload["halftime_analysis"]  = latest_halftime
+            payload["postmatch_summary"]  = latest_postmatch
+            payload["commentary_queue"]   = latest_commentary
+            await broadcast(payload)
+            print(f"[LOOP] broadcast done — real={intelligence.get('available', False)}")
+
+        except Exception as e:
+            print(f"[LOOP] Error: {e}")
+
+
+# =====================================================
+# DEBUG ENDPOINT
+# =====================================================
+
+@app.get("/debug/prematch/{fixture_id}")
+def debug_prematch(fixture_id: int):
+    """Force-run pre-match analysis and return full result including GPT narrative."""
+    # Clear cache to force fresh GPT call
+    prematch_engine._cache.pop(fixture_id, None)
+    prematch_engine._gpt_ts.pop(fixture_id, None)
+
+    match = {"raw_id": fixture_id}
+    result = prematch_engine.analyze(fixture_id, match)
+
+    data = result.get("data", {})
+    return {
+        "fixture_id":    fixture_id,
+        "available":     result.get("available"),
+        "gpt_narrative": data.get("gpt_narrative", ""),
+        "gpt_available": bool(data.get("gpt_narrative")),
+        "home":          data.get("home"),
+        "away":          data.get("away"),
+        "home_form":     data.get("home_form"),
+        "away_form":     data.get("away_form"),
+        "prediction":    data.get("prediction"),
+        "h2h_count":     len(data.get("h2h", [])),
+    }
+
+
+@app.get("/debug/stats/{fixture_id}")
+def debug_stats(fixture_id: int):
+    """
+    Direct API-Football probe — shows raw stats, lineups, events for a fixture.
+    Use to verify what the API actually returns.
+    """
+    raw_stats   = stats_collector._get("fixtures/statistics", {"fixture": fixture_id})
+    raw_lineups = stats_collector._get("fixtures/lineups",    {"fixture": fixture_id})
+    raw_events  = stats_collector._get("fixtures/events",     {"fixture": fixture_id})
+
+    processed = stats_collector.get_live_stats(fixture_id)
+
+    return {
+        "fixture_id":         fixture_id,
+        "raw_stats_teams":    len(raw_stats),
+        "raw_lineups_teams":  len(raw_lineups),
+        "raw_events_count":   len(raw_events),
+        "processed_home":     processed.get("home"),
+        "processed_away":     processed.get("away"),
+        "home_team":          processed.get("home_team"),
+        "away_team":          processed.get("away_team"),
+        "has_api_response":   bool(processed.get("home_team") or processed.get("away_team")),
+        "lineups_sample":     raw_lineups[:2] if raw_lineups else [],
+        "events_sample":      raw_events[:3] if raw_events else [],
+        "stats_sample":       raw_stats[:1] if raw_stats else [],
+    }
+
+
+
+# =====================================================
+# HOME
+# =====================================================
+
+@app.get("/")
+def home():
+    return {
+        "status":  "ONLINE",
+        "mode":    "AI_MATCH_INTELLIGENCE_V3",
+        "version": "3.0.0",
+        "phase1": {
+            "xg_momentum_engine":   True,
+            "tactical_engine":      True,
+            "key_moments_detector": True,
+        }
+    }
+
+
+# =====================================================
+# OVERLAY UI
+# =====================================================
+
+@app.get("/overlay", response_class=HTMLResponse)
+def overlay(request: Request):
+    return HTMLResponse(
+        jinja_env.get_template("overlay.html").render(request=request)
+    )
+
+
+# =====================================================
+# OVERLAY DATA
+# =====================================================
+
+@app.get("/overlay-data")
+def overlay_data(date: str = None):
+    fixtures = get_fixtures(date or "today")
+    return {
+        "success":      True,
+        "matches":      fixtures,
+        "active_match": active_match,
+        "date":         date or "today",
+    }
+
+
+_upcoming_cache: dict = {"ts": 0, "data": None}
+UPCOMING_CACHE_TTL = 600  # 10 минути — paid plan: up from 30 min
+
+
+@app.get("/upcoming")
+def upcoming_matches(days: int = 7, refresh: bool = False):
+    """
+    Returns Not Started matches for the next N days (default 7).
+    Cached for 30 minutes to preserve API quota.
+    Add ?refresh=true to force reload.
+    """
+    import time as _time
+    from datetime import datetime, timedelta
+
+    now_ts = _time.time()
+
+    # Return cached if fresh
+    if not refresh and _upcoming_cache["data"] and (now_ts - _upcoming_cache["ts"]) < UPCOMING_CACHE_TTL:
+        cached = _upcoming_cache["data"]
+        print(f"[UPCOMING] Cache hit — {cached['total']} matches, age {int(now_ts - _upcoming_cache['ts'])}s")
+        return cached
+
+    days        = max(1, min(days, 7))
+    ns_statuses = {"Not Started", "Time To Be Defined", "Scheduled"}
+    now         = datetime.now()
+
+    all_upcoming: list = []
+    by_date:      dict = {}
+
+    for i in range(days):
+        date_str = (now + timedelta(days=i)).strftime("%Y-%m-%d")
+        fixtures = get_fixtures(date_str)
+
+        ns_today = [m for m in fixtures if m.get("status") in ns_statuses]
+        if ns_today:
+            by_date[date_str] = sorted(ns_today, key=lambda m: m.get("start_time") or "")
+            all_upcoming.extend(ns_today)
+
+    competitions = sorted({m["competition"] for m in all_upcoming if m.get("competition")})
+
+    result = {
+        "success":      True,
+        "upcoming":     all_upcoming,
+        "by_date":      by_date,
+        "competitions": competitions,
+        "total":        len(all_upcoming),
+        "days_loaded":  days,
+        "cached_at":    datetime.now().strftime("%H:%M"),
+    }
+
+    _upcoming_cache["ts"]   = now_ts
+    _upcoming_cache["data"] = result
+    print(f"[UPCOMING] Fetched {len(all_upcoming)} upcoming matches over {days} days")
+    return result
+
+
+# =====================================================
+# SELECT MATCH
+# =====================================================
+
+@app.post("/select-match")
+async def select_match(request: Request):
+    global active_match, latest_intelligence, latest_prematch, latest_narrative
+
+    data = await request.json()
+    match = data.get("match")
+
+    global latest_halftime, latest_postmatch, latest_commentary, _last_goal_count, _last_ht_status, _last_ft_status
+    active_match        = match
+    latest_intelligence = {}
+    latest_prematch     = {}
+    latest_narrative    = ""
+    latest_halftime     = ""
+    latest_postmatch    = ""
+    latest_commentary   = []
+    _last_goal_count    = 0
+    _last_ht_status     = ""
+    _last_ft_status     = ""
+
+    # Clear caches so GPT always runs fresh on new match selection
+    if match and match.get("raw_id"):
+        fid = match["raw_id"]
+        prematch_engine._cache.pop(fid, None)
+        prematch_engine._gpt_ts.pop(fid, None)
+        tactical_engine._last_call_ts.pop(fid, None)
+
+    if active_match:
+        fixture_id  = active_match.get("raw_id")
+        match_phase = get_match_phase(active_match)
+
+        # Broadcast an immediate "loading" state so overlay responds instantly
+        loading_payload = build_overlay_response(active_match, prematch={"available": False})
+        loading_payload["halftime_analysis"] = ""
+        loading_payload["postmatch_summary"] = ""
+        loading_payload["commentary_queue"]  = []
+        await broadcast(loading_payload)
+
+        # Pre-match analysis starts in background — does NOT block select-match response
+        if fixture_id:
+            asyncio.create_task(_load_prematch_async(fixture_id, active_match))
+
+    return {
+        "success":      True,
+        "active_match": active_match,
+    }
+
+
+async def _load_prematch_async(fixture_id: int, match: dict):
+    """
+    Async task: runs prematch analysis in two phases for fast UI response.
+    Phase 1: rule-based data (fast ~2-3s) → broadcast immediately
+    Phase 2: GPT narrative (slow ~5-8s) → broadcast update when ready
+    """
+    global latest_prematch
+    print(f"[BG] Prematch task started for fixture {fixture_id}")
+    try:
+        loop = asyncio.get_running_loop()
+
+        # Phase 1: fast rule-based analysis (skip GPT)
+        result = await loop.run_in_executor(
+            None, prematch_engine.analyze_fast, fixture_id, match
+        )
+        latest_prematch = result
+        print(f"[BG] Phase 1 (rule-based) complete for fixture {fixture_id} — broadcasting")
+
+        # Broadcast rule-based data immediately
+        payload = build_overlay_response(
+            match,
+            intelligence=latest_intelligence or {},
+            prematch=latest_prematch,
+            live_narrative=latest_narrative,
+        )
+        payload["halftime_analysis"] = latest_halftime
+        payload["postmatch_summary"] = latest_postmatch
+        payload["commentary_queue"]  = latest_commentary
+        await broadcast(payload)
+
+        # Phase 2: GPT narrative (runs in background, updates when ready)
+        gpt_result = await loop.run_in_executor(
+            None, prematch_engine.generate_gpt_phase, fixture_id
+        )
+        if gpt_result:
+            latest_prematch = gpt_result
+            print(f"[BG] Phase 2 (GPT) complete for fixture {fixture_id} — broadcasting update")
+            payload = build_overlay_response(
+                match,
+                intelligence=latest_intelligence or {},
+                prematch=latest_prematch,
+                live_narrative=latest_narrative,
+            )
+            payload["halftime_analysis"] = latest_halftime
+            payload["postmatch_summary"] = latest_postmatch
+            payload["commentary_queue"]  = latest_commentary
+            await broadcast(payload)
+
+    except Exception as e:
+        import traceback
+        print(f"[BG] ERROR in prematch task: {e}")
+        traceback.print_exc()
+
+
+# =====================================================
+# WEBSOCKET
+# =====================================================
+
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    clients.add(websocket)
+    print("[WS] CLIENT CONNECTED")
+
+    try:
+        if active_match:
+            # Send full current state to newly connected client
+            init_payload = build_overlay_response(
+                active_match,
+                intelligence=latest_intelligence or {},
+                prematch=latest_prematch,
+                live_narrative=latest_narrative,
+            )
+            init_payload["halftime_analysis"] = latest_halftime
+            init_payload["postmatch_summary"] = latest_postmatch
+            init_payload["commentary_queue"]  = latest_commentary
+            await websocket.send_json(init_payload)
+        else:
+            await websocket.send_json({"type": "WAITING_MATCH"})
+
+        # Keep connection alive — updates come from live_stats_loop()
+        while True:
+            await asyncio.sleep(30)
+
+    except WebSocketDisconnect:
+        clients.discard(websocket)
+        print("[WS] CLIENT DISCONNECTED")
+    except Exception as e:
+        clients.discard(websocket)
+        print("[WS ERROR]", str(e))

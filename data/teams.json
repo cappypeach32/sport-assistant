@@ -1,0 +1,50 @@
+{
+  "argentina": {
+    "id": 1369,
+    "name": "Argentina",
+    "type": "national",
+    "aliases": ["arg", "argentina national team", "argentina nt"],
+    "league": "world",
+    "source": "manual"
+  },
+  "france": {
+    "id": 1335,
+    "name": "France",
+    "type": "national",
+    "aliases": ["fra", "france national team", "france nt"],
+    "league": "world",
+    "source": "manual"
+  },
+  "brazil": {
+    "id": 1370,
+    "name": "Brazil",
+    "type": "national",
+    "aliases": ["bra", "brazil national team"],
+    "league": "world",
+    "source": "manual"
+  },
+  "england": {
+    "id": 1337,
+    "name": "England",
+    "type": "national",
+    "aliases": ["eng", "england national team"],
+    "league": "world",
+    "source": "manual"
+  },
+  "spain": {
+    "id": 1339,
+    "name": "Spain",
+    "type": "national",
+    "aliases": ["esp", "spain national team"],
+    "league": "world",
+    "source": "manual"
+  },
+  "germany": {
+    "id": 1336,
+    "name": "Germany",
+    "type": "national",
+    "aliases": ["ger", "germany national team"],
+    "league": "world",
+    "source": "manual"
+  }
+}
