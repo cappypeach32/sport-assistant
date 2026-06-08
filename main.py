@@ -869,6 +869,14 @@ def overlay(request: Request):
     )
 
 
+@app.get("/overlay/commentator", response_class=HTMLResponse)
+def commentator_view(request: Request):
+    """Teleprompter-style view for live commentators."""
+    return HTMLResponse(
+        jinja_env.get_template("commentator.html").render(request=request)
+    )
+
+
 # =====================================================
 # OVERLAY DATA
 # =====================================================
@@ -876,11 +884,25 @@ def overlay(request: Request):
 @app.get("/overlay-data")
 def overlay_data(date: str = None):
     fixtures = get_fixtures(date or "today")
+    featured = match_selector.get_top_matches(fixtures, limit=5)
     return {
         "success":      True,
         "matches":      fixtures,
+        "featured":     featured,
         "active_match": active_match,
         "date":         date or "today",
+    }
+
+
+@app.get("/featured")
+def featured_matches(date: str = None, limit: int = 5):
+    """Top broadcast-priority matches for the selected day."""
+    fixtures = get_fixtures(date or "today")
+    limit = max(1, min(limit, 10))
+    return {
+        "success":  True,
+        "featured": match_selector.get_top_matches(fixtures, limit=limit),
+        "date":     date or "today",
     }
 
 

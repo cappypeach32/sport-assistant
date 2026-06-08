@@ -5,12 +5,17 @@ from datetime import datetime, timezone
 # =====================================================
 
 TOP_LEAGUES = {
-    11: 100,   # FIFA World Cup
-    2: 95,     # UEFA Champions League
-    8: 90,     # Premier League
-    564: 88,   # La Liga
-    82: 85,    # Bundesliga
-    384: 85,   # Serie A
+    1:   100,  # FIFA World Cup
+    2:   95,   # UEFA Champions League
+    4:   92,   # UEFA Euro
+    39:  90,   # Premier League
+    140: 88,   # La Liga
+    135: 85,   # Serie A
+    78:  85,   # Bundesliga
+    61:  84,   # Ligue 1
+    3:   82,   # UEFA Europa League
+    172: 78,   # Bulgaria First League
+    174: 72,   # Bulgaria Cup
 }
 
 # =====================================================
@@ -114,11 +119,8 @@ class MatchSelectionEngine:
         # =============================================
 
         LIVE_STATES = [
-            "live",
-            "1st half",
-            "2nd half",
-            "halftime",
-            "ht"
+            "live", "1st half", "2nd half", "first half", "second half",
+            "halftime", "half time", "ht", "in progress", "extra time",
         ]
 
         if any(x in status for x in LIVE_STATES):

@@ -718,6 +718,36 @@ body {
     background: var(--surface);
 }
 .broadcast-body-inner p { margin: 0; }
+.broadcast-section-actions { display: flex; align-items: center; gap: 6px; }
+.copy-btn {
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--muted); border-radius: 6px; padding: 2px 8px;
+    font-size: 12px; cursor: pointer; line-height: 1.4;
+}
+.copy-btn:hover { color: var(--green); border-color: var(--green); }
+.copy-btn-sm { padding: 2px 6px; font-size: 11px; }
+.copy-btn.done { color: var(--green); border-color: var(--green); }
+
+.featured-item {
+    display: flex; gap: 8px; align-items: flex-start;
+    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    border: 1px solid transparent; margin-bottom: 4px;
+    background: rgba(234, 179, 8, 0.06);
+}
+.featured-item:hover { border-color: rgba(234, 179, 8, 0.35); }
+.featured-item.active { border-color: var(--green); background: rgba(0,255,153,0.08); }
+.featured-star { font-size: 12px; line-height: 1.6; flex-shrink: 0; }
+.view-link {
+    display: block; margin-top: 8px; font-size: 12px; font-weight: 600;
+    color: var(--purple); text-decoration: none;
+}
+.view-link:hover { color: var(--green); }
+.alert-btn {
+    margin-top: 6px; width: 100%; padding: 6px 10px; font-size: 11px;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--muted); cursor: pointer;
+}
+.alert-btn.on { border-color: var(--green); color: var(--green); }
 
 /* accordion for live mode */
 .accordion-toggle {
@@ -888,6 +918,14 @@ body {
                 <span id="health-poll-text">Обновено: —</span>
             </div>
         </div>
+
+        <a href="/overlay/commentator" target="_blank" class="view-link">🎙️ Коментаторски изглед</a>
+        <button type="button" class="alert-btn" id="alert-btn" onclick="toggleAlerts()">🔔 Аларми при гол</button>
+    </div>
+
+    <div id="featured-section" style="display:none;padding:0 12px 8px">
+        <div class="match-group-label" style="color:#eab308;margin-bottom:6px">⭐ Препоръчани</div>
+        <div id="featured-matches"></div>
     </div>
 
     <div class="match-list" id="matches"></div>
@@ -1106,7 +1144,13 @@ let state = {
     selectedDate: null,     // active date chip filter
     prematchByFixture: {}, // client cache — instant restore when re-selecting matches
     overlayByFixture: {},  // last full payload per fixture
+    featured:         [],
 };
+
+let _alertGoalKeys = new Set();
+let _alertMomentKeys = new Set();
+let _alertsOn = localStorage.getItem("broadcastAlerts") === "1";
+let _alertFixtureId = null;
 
 function getId(m) {
     const id = m?.raw_id ?? m?.id;
@@ -1137,6 +1181,108 @@ function switchTab(tab) {
     const source = tab === "upcoming" ? state.upcoming : state.all;
     buildLeagueFilter(source);
     filterMatches();
+    if (tab === "upcoming") loadFeatured(todayStr());
+}
+
+function renderFeatured(list) {
+    const sec = document.getElementById("featured-section");
+    const el  = document.getElementById("featured-matches");
+    if (!sec || !el) return;
+    if (!list?.length) {
+        sec.style.display = "none";
+        return;
+    }
+    sec.style.display = "block";
+    el.innerHTML = list.map(m => {
+        const id = getId(m);
+        const live = isLive(m);
+        const ko = kickoffTime(m);
+        return `
+        <div class="featured-item ${state.selectedId === id ? "active" : ""}"
+             onclick="selectMatch('${escAttr(id)}')">
+            <span class="featured-star">⭐</span>
+            <div style="min-width:0;flex:1">
+                <div class="match-teams">${m.home} — ${m.away}</div>
+                <div class="match-meta">${m.competition || ""}${live ? ' · <span style="color:var(--red)">Live</span>' : (ko ? ` · ${ko}` : "")}</div>
+            </div>
+        </div>`;
+    }).join("");
+}
+
+async function loadFeatured(date) {
+    try {
+        const d = date || document.getElementById("date-picker")?.value || todayStr();
+        const res  = await fetch(`/featured?date=${d}`);
+        const data = await res.json();
+        if (data.success) {
+            state.featured = data.featured || [];
+            buildMap(state.featured);
+            renderFeatured(state.featured);
+        }
+    } catch (e) { console.error(e); }
+}
+
+function updateAlertsBtn() {
+    const btn = document.getElementById("alert-btn");
+    if (!btn) return;
+    btn.classList.toggle("on", _alertsOn);
+    btn.textContent = _alertsOn ? "🔔 Аларми: включени" : "🔔 Аларми при гол";
+}
+
+function toggleAlerts() {
+    _alertsOn = !_alertsOn;
+    localStorage.setItem("broadcastAlerts", _alertsOn ? "1" : "0");
+    updateAlertsBtn();
+    if (_alertsOn && "Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+    }
+}
+
+function playAlertSound() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.12, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+        o.start(); o.stop(ctx.currentTime + 0.35);
+    } catch (e) {}
+}
+
+function fireAlert(title, body) {
+    if (Notification.permission === "granted") {
+        new Notification(title, { body });
+    }
+    playAlertSound();
+}
+
+function checkMatchAlerts(data) {
+    if (!_alertsOn || data.phase !== "live") return;
+
+    const fid = data.match?.raw_id;
+    if (fid !== _alertFixtureId) {
+        _alertGoalKeys.clear();
+        _alertMomentKeys.clear();
+        _alertFixtureId = fid;
+    }
+
+    for (const ev of (data.events || [])) {
+        if (ev.type !== "Goal") continue;
+        const key = `${ev.minute}|${ev.team}|${ev.player || ev.message}`;
+        if (_alertGoalKeys.has(key)) continue;
+        _alertGoalKeys.add(key);
+        fireAlert(`⚽ ГОЛ ${ev.minute}'`, `${ev.team} — ${ev.message || ev.player || ""}`);
+    }
+
+    for (const km of (data.key_moments || [])) {
+        if (!["high", "critical"].includes(km.severity)) continue;
+        const key = `${km.type}|${data.match?.minute}|${km.title}`;
+        if (_alertMomentKeys.has(key)) continue;
+        _alertMomentKeys.add(key);
+        fireAlert(km.title || "Ключов момент", km.message || "");
+    }
 }
 
 function buildDateChips() {
@@ -1296,6 +1442,7 @@ function selectMatch(id) {
     _lastPhase = "";
 
     renderMatches(state.filtered.length ? state.filtered : state.all);
+    renderFeatured(state.featured);
 
     document.getElementById("waiting-state").style.display  = "none";
     document.getElementById("card-header").style.display    = "block";
@@ -1303,6 +1450,9 @@ function selectMatch(id) {
 
     if (!sameMatch) {
         _prematchRenderedKey = "";
+        _alertGoalKeys.clear();
+        _alertMomentKeys.clear();
+        _alertFixtureId = null;
         const postC = document.getElementById("postmatch-sections");
         if (postC) { postC.innerHTML = ""; delete postC.dataset.rendered; }
         const htC = document.getElementById("halftime-sections");
@@ -1734,6 +1884,33 @@ function getSectionIcon(title) {
 }
 
 let _bsCounter = 0;
+const _copyStore = {};
+
+function copyToClipboard(text, btn) {
+    if (!text) return;
+    const done = () => {
+        if (btn) {
+            const orig = btn.textContent;
+            btn.textContent = "✓";
+            btn.classList.add("done");
+            setTimeout(() => { btn.textContent = orig; btn.classList.remove("done"); }, 1500);
+        }
+    };
+    if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(() => {});
+    } else {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); done(); } catch (e) {}
+        document.body.removeChild(ta);
+    }
+}
+
+function copyById(id, btn) {
+    copyToClipboard(_copyStore[id] || "", btn);
+}
 
 function renderBroadcastGuide(narrative, home, away) {
     if (!narrative) return "";
@@ -1758,11 +1935,18 @@ function renderBroadcastGuide(narrative, home, away) {
             .replace(/\n\n/g, '</p><p style="margin-top:6px">')
             .replace(/\n/g, "<br>");
 
+        const copyId = `${prefix}-copy-${idx}`;
+        _copyStore[copyId] = `${rawTitle}\n\n${body}`;
+
         return `
         <div class="broadcast-section" id="${prefix}-${idx}">
             <div class="broadcast-section-header" onclick="toggleBroadcastSection('${prefix}',${idx})">
                 <span>${icon} ${rawTitle}</span>
-                <span class="arrow" id="${prefix}-arrow-${idx}">▼</span>
+                <span class="broadcast-section-actions">
+                    <button type="button" class="copy-btn" title="Копирай секцията"
+                        onclick="event.stopPropagation();copyById('${copyId}',this)">📋</button>
+                    <span class="arrow" id="${prefix}-arrow-${idx}">▼</span>
+                </span>
             </div>
             <div class="broadcast-section-body" id="${prefix}-body-${idx}" style="max-height:${idx === 0 ? '9999px' : '0'}">
                 <div class="broadcast-body-inner"><p>${formattedBody}</p></div>
@@ -1910,14 +2094,20 @@ function renderCommentaryQueue(data) {
     if (minuteEl) minuteEl.textContent = `${newMinute}'`;
 
     if (pointsEl) {
-        pointsEl.innerHTML = points.map((p, i) => `
+        pointsEl.innerHTML = points.map((p, i) => {
+            const copyId = `cp-${newMinute}-${i}`;
+            _copyStore[copyId] = `${p.title || ""}\n\n${p.text || ""}`;
+            return `
             <div class="commentary-point">
                 <div class="cp-num">${i + 1}</div>
                 <div class="cp-body">
                     <div class="cp-title">${p.title || ""}</div>
                     <div class="cp-text">${p.text || ""}</div>
                 </div>
-            </div>`).join("");
+                <button type="button" class="copy-btn copy-btn-sm" title="Копирай"
+                    onclick="copyById('${copyId}',this)">📋</button>
+            </div>`;
+        }).join("");
     }
 
     if (card) card.style.display = "block";
@@ -2440,9 +2630,11 @@ function update(data) {
         renderStats(data);
         renderEvents(data);
         renderHealth(data);
+        checkMatchAlerts(data);
     }
 
     renderMatches(state.filtered.length ? state.filtered : state.all);
+    renderFeatured(state.featured);
 }
 
 /* =========================================================
@@ -2507,7 +2699,10 @@ async function loadMatches() {
         const data = await res.json();
         if (data.success) {
             state.all = data.matches || [];
+            state.featured = data.featured || [];
             buildMap(state.all);
+            buildMap(state.featured);
+            renderFeatured(state.featured);
             buildLeagueFilter(state.all);
             filterMatches();
             if (data.active_match && !state.selectedId) {
@@ -2551,6 +2746,7 @@ async function refreshUpcoming() {
 }
 
 // Load both on start
+updateAlertsBtn();
 loadMatches();
 loadUpcoming();
 
