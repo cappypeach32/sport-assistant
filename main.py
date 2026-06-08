@@ -582,14 +582,25 @@ def build_overlay_response(
             "mode":          "AI_MATCH_INTELLIGENCE_V3",
             "real_data":     real_available,
             "generated_at":  datetime.now(timezone.utc).isoformat(),
-            "health": {
-                "last_poll_at":      latest_health.get("last_poll_at"),
-                "poll_interval_sec": POLL_INTERVAL,
-                "api_ok":            latest_health.get("api_ok", bool(live_fixture)),
-                "last_error":        latest_health.get("last_error", ""),
-                "status_short":      live_fixture.get("status_short") or match.get("status_short", ""),
-            },
+            "health": _build_health_meta(live_fixture, match),
         },
+    }
+
+
+def _build_health_meta(live_fixture: dict, match: dict) -> dict:
+    """Health for overlay — based on current fixture fetch, not stale global cache."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    api_ok = bool(
+        live_fixture
+        and (live_fixture.get("status_short") or live_fixture.get("status_long"))
+    )
+    return {
+        "last_poll_at":      latest_health.get("last_poll_at") or now_iso,
+        "poll_interval_sec": POLL_INTERVAL,
+        "api_ok":            api_ok,
+        "last_error":        latest_health.get("last_error", "") if not api_ok else "",
+        "status_short":      live_fixture.get("status_short") or match.get("status_short", ""),
+        "status_long":       live_fixture.get("status_long") or match.get("status", ""),
     }
 
 
@@ -751,12 +762,15 @@ async def live_stats_loop():
             payload["halftime_analysis"]  = latest_halftime
             payload["postmatch_summary"]  = latest_postmatch
             payload["commentary_queue"]   = latest_commentary
-            await broadcast(payload)
             latest_health = {
                 "last_poll_at": datetime.now(timezone.utc).isoformat(),
                 "last_error":   "",
-                "api_ok":       bool(live_fixture),
+                "api_ok":       bool(
+                    live_fixture
+                    and (live_fixture.get("status_short") or live_fixture.get("status_long"))
+                ),
             }
+            await broadcast(payload)
             print(f"[LOOP] broadcast done — real={intelligence.get('available', False)}")
 
         except Exception as e:

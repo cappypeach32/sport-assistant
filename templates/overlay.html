@@ -1378,11 +1378,26 @@ function renderHealth(data) {
     if (pollWrap) pollWrap.style.display = "flex";
 
     const apiOk = health.api_ok === true;
+    const phase = data?.phase || "";
+    const statusShort = (health.status_short || "").toUpperCase();
     setHealthDot("health-api-dot", apiOk ? "ok" : "warn");
     const realData = data?.meta?.real_data === true;
-    setText("health-api-text", apiOk
-        ? (realData ? "API: live данни" : "API: без live stats")
-        : "API: няма отговор");
+
+    if (health.last_error) {
+        setText("health-api-text", `API грешка: ${health.last_error.slice(0, 40)}`);
+        setHealthDot("health-api-dot", "err");
+    } else if (!apiOk) {
+        setText("health-api-text", "API: няма отговор");
+    } else if (statusShort === "CANC") {
+        setText("health-api-text", "API: свързан — мачът е отменен");
+        setHealthDot("health-api-dot", "warn");
+    } else if (realData) {
+        setText("health-api-text", "API: live данни");
+    } else if (phase === "prematch") {
+        setText("health-api-text", "API: свързан (преди старт)");
+    } else {
+        setText("health-api-text", "API: свързан");
+    }
 
     if (health.last_poll_at) {
         const ago = Math.max(0, Math.round((Date.now() - new Date(health.last_poll_at).getTime()) / 1000));
@@ -1391,10 +1406,6 @@ function renderHealth(data) {
         setText("health-poll-text", "Обновено: —");
     }
 
-    if (health.last_error) {
-        setText("health-api-text", `API грешка: ${health.last_error.slice(0, 40)}`);
-        setHealthDot("health-api-dot", "err");
-    }
 }
 
 /* =========================================================
