@@ -2,7 +2,13 @@
 <html lang="bg">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+<meta name="theme-color" content="#05060a"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<link rel="manifest" href="/static/manifest.webmanifest"/>
+<link rel="apple-touch-icon" href="/static/icon.svg"/>
+<link rel="stylesheet" href="/static/tablet.css"/>
 <title>Коментатор — AI Sports</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -17,66 +23,83 @@ body {
     min-height: 100vh; padding: 20px 24px 40px;
 }
 .top-bar {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; margin-bottom: 24px; flex-wrap: wrap;
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; margin-bottom: 20px; flex-wrap: wrap;
 }
 .top-bar a {
-    color: var(--blue); text-decoration: none; font-size: 13px; font-weight: 600;
+    color: var(--blue); text-decoration: none; font-size: 0.9rem; font-weight: 600;
 }
-.conn { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.conn { font-size: 0.8rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .conn-dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
 .conn-dot.err { background: var(--red); }
 
 .scoreboard {
-    text-align: center; padding: 28px 20px;
+    text-align: center; padding: 1.75rem 1.25rem;
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: 16px; margin-bottom: 20px;
+    border-radius: 16px; margin-bottom: 1.25rem;
 }
-.teams { font-size: clamp(22px, 4vw, 36px); font-weight: 800; letter-spacing: -0.02em; }
+.teams { font-size: clamp(1.4rem, 4vw, 2.25rem); font-weight: 800; letter-spacing: -0.02em; }
 .score {
-    font-size: clamp(48px, 10vw, 80px); font-weight: 900;
-    color: var(--green); margin: 12px 0; line-height: 1;
+    font-size: clamp(3rem, 10vw, 5rem); font-weight: 900;
+    color: var(--green); margin: 0.75rem 0; line-height: 1;
 }
-.meta { font-size: 15px; color: var(--muted); }
+.meta { font-size: 0.95rem; color: var(--muted); }
 .minute {
-    display: inline-block; margin-top: 10px; padding: 6px 14px;
+    display: inline-block; margin-top: 0.6rem; padding: 0.4rem 0.9rem;
     background: var(--red); color: #fff; border-radius: 20px;
-    font-size: 16px; font-weight: 800;
+    font-size: 1rem; font-weight: 800;
 }
 
 .section {
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: 14px; padding: 20px 22px; margin-bottom: 16px;
+    border-radius: 14px; padding: 1.25rem 1.4rem; margin-bottom: 1rem;
 }
 .section-label {
-    font-size: 12px; font-weight: 800; letter-spacing: 0.08em;
-    text-transform: uppercase; color: var(--purple); margin-bottom: 14px;
+    font-size: 0.75rem; font-weight: 800; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--purple); margin-bottom: 0.9rem;
 }
 .narrative {
-    font-size: clamp(20px, 3.5vw, 28px); line-height: 1.45; font-weight: 500;
+    font-size: clamp(1.25rem, 3.5vw, 1.75rem); line-height: 1.45; font-weight: 500;
 }
 .point {
-    padding: 16px 0; border-bottom: 1px solid var(--border);
+    padding: 1rem 0; border-bottom: 1px solid var(--border);
 }
 .point:last-child { border-bottom: none; }
 .point-title {
-    font-size: clamp(18px, 3vw, 24px); font-weight: 800;
-    color: var(--green); margin-bottom: 8px;
+    font-size: clamp(1.1rem, 3vw, 1.5rem); font-weight: 800;
+    color: var(--green); margin-bottom: 0.5rem;
 }
 .point-text {
-    font-size: clamp(17px, 2.8vw, 22px); line-height: 1.5; color: var(--text);
+    font-size: clamp(1.05rem, 2.8vw, 1.35rem); line-height: 1.5; color: var(--text);
 }
-.empty {
-    font-size: 18px; color: var(--muted); text-align: center; padding: 40px 20px;
+.empty, .waiting {
+    text-align: center; padding: 3rem 1.25rem; color: var(--muted); font-size: 1.15rem;
 }
-.waiting { text-align: center; padding: 80px 20px; color: var(--muted); font-size: 20px; }
+.alert-btn {
+    margin-top: 0.5rem; width: 100%; padding: 0.75rem;
+    border-radius: 10px; border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04); color: var(--muted);
+    font-size: 0.85rem; font-weight: 700; cursor: pointer;
+}
+.alert-btn.on { border-color: var(--green); color: var(--green); }
 </style>
 </head>
-<body>
+<body class="tablet-commentator">
 
 <div class="top-bar">
-    <a href="/overlay">← Пълен overlay</a>
+    <div>
+        <a href="/overlay">← Пълен overlay</a>
+        <div class="tablet-bar" style="margin-top:10px">
+            <button type="button" class="tablet-btn" onclick="TabletMode.changeFont(-0.1)">A−</button>
+            <button type="button" class="tablet-btn" id="font-scale-label" style="min-width:52px">100%</button>
+            <button type="button" class="tablet-btn" onclick="TabletMode.changeFont(0.1)">A+</button>
+            <button type="button" class="tablet-btn" id="wake-btn" onclick="TabletMode.toggleWakeLock()">☀️ Екранът да не гаси</button>
+            <button type="button" class="tablet-btn" id="pwa-install-btn" style="display:none" onclick="TabletMode.installPwa()">📲 Инсталирай</button>
+        </div>
+        <button type="button" class="alert-btn" id="alert-btn" onclick="TabletMode.toggleAlerts()">🔔 Аларми (live)</button>
+        <p class="tablet-hint">iOS: Safari → Сподели → „На началния екран“</p>
+    </div>
     <div class="conn">
         <span class="conn-dot" id="conn-dot"></span>
         <span id="conn-text">Свързване...</span>
@@ -109,59 +132,19 @@ body {
     </div>
 </div>
 
+<script src="/static/tablet.js"></script>
 <script>
-let _wsOk = false;
-let _goalKeys = new Set();
-let _lastFixture = null;
-
 function setConn(ok) {
-    _wsOk = ok;
     document.getElementById("conn-dot").className = "conn-dot " + (ok ? "ok" : "err");
     document.getElementById("conn-text").textContent = ok ? "На живо" : "Прекъсната връзка";
-}
-
-function playBeep() {
-    try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.connect(g); g.connect(ctx.destination);
-        o.frequency.value = 880;
-        g.gain.setValueAtTime(0.15, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
-        o.start(); o.stop(ctx.currentTime + 0.4);
-    } catch (e) {}
-}
-
-function notify(title, body) {
-    if (Notification.permission === "granted") {
-        new Notification(title, { body, icon: "⚽" });
-    }
-    playBeep();
-}
-
-function checkGoals(data) {
-    const fid = data.match?.raw_id;
-    if (fid !== _lastFixture) {
-        _goalKeys.clear();
-        _lastFixture = fid;
-    }
-    for (const ev of (data.events || [])) {
-        if (ev.type !== "Goal") continue;
-        const key = `${ev.minute}|${ev.team}|${ev.player || ev.message}`;
-        if (_goalKeys.has(key)) continue;
-        _goalKeys.add(key);
-        notify(`⚽ ГОЛ ${ev.minute}'`, `${ev.team} — ${ev.message || ev.player || ""}`);
-    }
 }
 
 function extractTalkingPoints(narrative) {
     if (!narrative) return [];
     const m = narrative.match(/##\s*ГОВОРНИ[\s\S]*?(?=\n## |$)/i);
     if (!m) return [];
-    const block = m[0];
     const points = [];
-    for (const line of block.split("\n")) {
+    for (const line of m[0].split("\n")) {
         const hit = line.match(/^\d+\.\s*\*?\*?(.+?)\*?\*?:\s*(.+)$/);
         if (hit) points.push({ title: hit[1].replace(/\*\*/g, "").trim(), text: hit[2].trim() });
     }
@@ -226,7 +209,7 @@ function update(data) {
         pmSec.style.display = "none";
     }
 
-    if (Notification.permission === "granted") checkGoals(data);
+    TabletMode.checkAlerts(data);
 }
 
 function connect() {
@@ -240,11 +223,13 @@ function connect() {
     };
 }
 
-if ("Notification" in window && Notification.permission === "default") {
-    Notification.requestPermission();
-}
-
-connect();
+document.addEventListener("DOMContentLoaded", () => {
+    TabletMode.init();
+    if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+    }
+    connect();
+});
 </script>
 </body>
 </html>

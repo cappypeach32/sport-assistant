@@ -1,0 +1,110 @@
+/* Tablet mode — shared by overlay + commentator */
+html {
+    --font-scale: 1;
+}
+
+body.tablet-mode {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+.tablet-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    align-items: center;
+}
+
+.tablet-btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    color: #e8eaf0;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.tablet-btn:hover,
+.tablet-btn:active {
+    background: rgba(0, 255, 153, 0.12);
+    border-color: rgba(0, 255, 153, 0.35);
+}
+
+.tablet-btn.on {
+    border-color: #00ff99;
+    color: #00ff99;
+}
+
+.tablet-hint {
+    width: 100%;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.38);
+    line-height: 1.35;
+    margin-top: 2px;
+}
+
+/* Font scale — overlay */
+body.tablet-overlay {
+    font-size: calc(17px * var(--font-scale));
+}
+
+/* Font scale — commentator */
+body.tablet-commentator {
+    font-size: calc(16px * var(--font-scale));
+}
+
+/* Larger touch targets on coarse pointers (tablets) */
+@media (pointer: coarse) {
+    .match-item {
+        min-height: 54px;
+        padding: 14px 14px !important;
+        margin-bottom: 8px !important;
+    }
+
+    .featured-item {
+        min-height: 54px;
+        padding: 12px 12px !important;
+    }
+
+    .tab-btn {
+        min-height: 44px;
+        padding: 10px 6px !important;
+    }
+
+    .date-btn {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 10px 12px !important;
+    }
+
+    .date-input,
+    .search-input,
+    .league-select {
+        min-height: 44px;
+        padding: 12px !important;
+    }
+
+    .date-chip {
+        min-height: 36px;
+        padding: 8px 12px !important;
+    }
+
+    .alert-btn,
+    .view-link {
+        min-height: 44px;
+        padding: 12px !important;
+        display: flex;
+        align-items: center;
+    }
+
+    .copy-btn {
+        min-height: 36px;
+        min-width: 36px;
+    }
+}

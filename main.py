@@ -6,8 +6,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 
 from data.director.sport_service import get_fixtures
@@ -55,6 +58,10 @@ jinja_env = Environment(
 )
 
 match_selector = MatchSelectionEngine()
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Phase 1 engines
 stats_collector  = LiveStatsCollector()
@@ -872,6 +879,11 @@ def home():
 # =====================================================
 # OVERLAY UI
 # =====================================================
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
+
 
 @app.get("/overlay", response_class=HTMLResponse)
 def overlay(request: Request):

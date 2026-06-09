@@ -1,8 +1,14 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="bg">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+<meta name="theme-color" content="#05060a"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<link rel="manifest" href="/static/manifest.webmanifest"/>
+<link rel="apple-touch-icon" href="/static/icon.svg"/>
+<link rel="stylesheet" href="/static/tablet.css"/>
 <title>AI Sports Broadcast</title>
 <style>
 
@@ -860,7 +866,7 @@ body {
 </style>
 </head>
 
-<body>
+<body class="tablet-overlay">
 <div class="layout">
 
 <!-- =========================================================
@@ -919,8 +925,17 @@ body {
             </div>
         </div>
 
+        <div class="tablet-bar">
+            <button type="button" class="tablet-btn" onclick="TabletMode.changeFont(-0.1)" title="По-малък шрифт">A−</button>
+            <button type="button" class="tablet-btn" id="font-scale-label" style="min-width:52px">100%</button>
+            <button type="button" class="tablet-btn" onclick="TabletMode.changeFont(0.1)" title="По-голям шрифт">A+</button>
+            <button type="button" class="tablet-btn" id="wake-btn" onclick="TabletMode.toggleWakeLock()">☀️ Екранът да не гаси</button>
+            <button type="button" class="tablet-btn" id="pwa-install-btn" style="display:none" onclick="TabletMode.installPwa()">📲 Инсталирай</button>
+        </div>
+        <p class="tablet-hint">iOS: Safari → Сподели → „На началния екран“</p>
+
         <a href="/overlay/commentator" target="_blank" class="view-link">🎙️ Коментаторски изглед</a>
-        <button type="button" class="alert-btn" id="alert-btn" onclick="toggleAlerts()">🔔 Аларми при гол</button>
+        <button type="button" class="alert-btn" id="alert-btn" onclick="TabletMode.toggleAlerts()">🔔 Аларми (live)</button>
     </div>
 
     <div id="featured-section" style="display:none;padding:0 12px 8px">
@@ -1147,10 +1162,6 @@ let state = {
     featured:         [],
 };
 
-let _alertGoalKeys = new Set();
-let _alertMomentKeys = new Set();
-let _alertsOn = localStorage.getItem("broadcastAlerts") === "1";
-let _alertFixtureId = null;
 
 function getId(m) {
     const id = m?.raw_id ?? m?.id;
@@ -1220,69 +1231,6 @@ async function loadFeatured(date) {
             renderFeatured(state.featured);
         }
     } catch (e) { console.error(e); }
-}
-
-function updateAlertsBtn() {
-    const btn = document.getElementById("alert-btn");
-    if (!btn) return;
-    btn.classList.toggle("on", _alertsOn);
-    btn.textContent = _alertsOn ? "🔔 Аларми: включени" : "🔔 Аларми при гол";
-}
-
-function toggleAlerts() {
-    _alertsOn = !_alertsOn;
-    localStorage.setItem("broadcastAlerts", _alertsOn ? "1" : "0");
-    updateAlertsBtn();
-    if (_alertsOn && "Notification" in window && Notification.permission === "default") {
-        Notification.requestPermission();
-    }
-}
-
-function playAlertSound() {
-    try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.connect(g); g.connect(ctx.destination);
-        o.frequency.value = 880;
-        g.gain.setValueAtTime(0.12, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
-        o.start(); o.stop(ctx.currentTime + 0.35);
-    } catch (e) {}
-}
-
-function fireAlert(title, body) {
-    if (Notification.permission === "granted") {
-        new Notification(title, { body });
-    }
-    playAlertSound();
-}
-
-function checkMatchAlerts(data) {
-    if (!_alertsOn || data.phase !== "live") return;
-
-    const fid = data.match?.raw_id;
-    if (fid !== _alertFixtureId) {
-        _alertGoalKeys.clear();
-        _alertMomentKeys.clear();
-        _alertFixtureId = fid;
-    }
-
-    for (const ev of (data.events || [])) {
-        if (ev.type !== "Goal") continue;
-        const key = `${ev.minute}|${ev.team}|${ev.player || ev.message}`;
-        if (_alertGoalKeys.has(key)) continue;
-        _alertGoalKeys.add(key);
-        fireAlert(`⚽ ГОЛ ${ev.minute}'`, `${ev.team} — ${ev.message || ev.player || ""}`);
-    }
-
-    for (const km of (data.key_moments || [])) {
-        if (!["high", "critical"].includes(km.severity)) continue;
-        const key = `${km.type}|${data.match?.minute}|${km.title}`;
-        if (_alertMomentKeys.has(key)) continue;
-        _alertMomentKeys.add(key);
-        fireAlert(km.title || "Ключов момент", km.message || "");
-    }
 }
 
 function buildDateChips() {
@@ -1450,9 +1398,7 @@ function selectMatch(id) {
 
     if (!sameMatch) {
         _prematchRenderedKey = "";
-        _alertGoalKeys.clear();
-        _alertMomentKeys.clear();
-        _alertFixtureId = null;
+        TabletMode.resetAlertsForMatch();
         const postC = document.getElementById("postmatch-sections");
         if (postC) { postC.innerHTML = ""; delete postC.dataset.rendered; }
         const htC = document.getElementById("halftime-sections");
@@ -2630,7 +2576,7 @@ function update(data) {
         renderStats(data);
         renderEvents(data);
         renderHealth(data);
-        checkMatchAlerts(data);
+        TabletMode.checkAlerts(data);
     }
 
     renderMatches(state.filtered.length ? state.filtered : state.all);
@@ -2746,7 +2692,6 @@ async function refreshUpcoming() {
 }
 
 // Load both on start
-updateAlertsBtn();
 loadMatches();
 loadUpcoming();
 
@@ -2759,5 +2704,7 @@ function setText(id, val) {
 }
 
 </script>
+<script src="/static/tablet.js"></script>
+<script>document.addEventListener("DOMContentLoaded", () => TabletMode.init());</script>
 </body>
 </html>
