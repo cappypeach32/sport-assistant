@@ -54,7 +54,123 @@ body {
     overflow: hidden;
 }
 
-.sidebar-header { margin-bottom: 12px; }
+.sidebar-header {
+    flex-shrink: 0;
+    margin-bottom: 8px;
+}
+
+.sidebar-tools-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    align-items: stretch;
+}
+.sidebar-tools-row .view-link {
+    flex: 1;
+    margin-top: 0;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.03);
+    text-align: center;
+    font-size: 11px;
+}
+.sidebar-tools-row .alert-btn {
+    flex: 1;
+    margin-top: 0;
+}
+
+.sidebar-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -14px;
+    padding: 0 14px 18px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0,255,153,0.35) transparent;
+    position: relative;
+}
+.sidebar-scroll::-webkit-scrollbar { width: 8px; }
+.sidebar-scroll::-webkit-scrollbar-thumb {
+    background: rgba(0,255,153,0.28);
+    border-radius: 4px;
+}
+.sidebar-scroll.has-more::after {
+    content: "";
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: block;
+    height: 36px;
+    margin-top: -36px;
+    pointer-events: none;
+    background: linear-gradient(to bottom, transparent, var(--surface) 85%);
+}
+.sidebar-scroll-hint {
+    display: none;
+    position: sticky;
+    bottom: 0;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 8px 0 4px;
+    margin-top: 4px;
+    background: linear-gradient(to bottom, transparent, var(--surface) 40%);
+    pointer-events: none;
+}
+.sidebar-scroll.has-more .sidebar-scroll-hint { display: block; }
+
+.all-matches-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    padding: 10px 4px 6px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+}
+
+.featured-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 0 6px;
+    cursor: pointer;
+    user-select: none;
+}
+.featured-header-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #eab308;
+    font-weight: 800;
+}
+.featured-toggle {
+    font-size: 10px;
+    color: var(--muted);
+    transition: transform .2s;
+}
+.featured-section.collapsed .featured-toggle { transform: rotate(-90deg); }
+.featured-section.collapsed #featured-matches { display: none; }
+
+@media (min-width: 900px) {
+    .tablet-hint { display: none !important; }
+    .sidebar-header .tablet-bar .tablet-btn#wake-btn,
+    .sidebar-header .tablet-bar .tablet-btn#pwa-install-btn {
+        display: none;
+    }
+    .featured-item {
+        padding: 6px 8px;
+        margin-bottom: 3px;
+    }
+    .featured-item .match-teams { font-size: 13px; }
+    .featured-item .match-meta { font-size: 11px; }
+}
 
 .sidebar-title {
     font-size: 17px;
@@ -182,11 +298,8 @@ body {
 .date-chip.active { background: rgba(0,255,153,0.12); color: var(--green); border-color: var(--green); }
 
 .match-list {
-    flex: 1;
-    overflow-y: auto;
-    margin-top: 10px;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
+    overflow: visible;
+    margin-top: 0;
 }
 
 .match-item {
@@ -1066,16 +1179,25 @@ body {
         </div>
         <p class="tablet-hint">iOS: Safari → Сподели → „На началния екран“</p>
 
-        <a href="/overlay/commentator" target="_blank" class="view-link">🎙️ Коментаторски изглед</a>
-        <button type="button" class="alert-btn" id="alert-btn" onclick="TabletMode.toggleAlerts()">🔔 Аларми (live)</button>
+        <div class="sidebar-tools-row">
+            <a href="/overlay/commentator" target="_blank" class="view-link">🎙️ Коментатор</a>
+            <button type="button" class="alert-btn" id="alert-btn" onclick="TabletMode.toggleAlerts()">🔔 Аларми</button>
+        </div>
     </div>
 
-    <div id="featured-section" style="display:none;padding:0 12px 8px">
-        <div class="match-group-label" style="color:#eab308;margin-bottom:6px">⭐ Препоръчани</div>
-        <div id="featured-matches"></div>
-    </div>
+    <div class="sidebar-scroll" id="sidebar-scroll">
+        <div id="featured-section" class="featured-section" style="display:none">
+            <div class="featured-header" onclick="toggleFeaturedSection()">
+                <span class="featured-header-label" id="featured-header-label">⭐ Препоръчани</span>
+                <span class="featured-toggle" id="featured-toggle">▼</span>
+            </div>
+            <div id="featured-matches"></div>
+        </div>
 
-    <div class="match-list" id="matches"></div>
+        <div class="all-matches-label" id="all-matches-label" style="display:none">Всички мачове</div>
+        <div class="match-list" id="matches"></div>
+        <div class="sidebar-scroll-hint">↓ още мачове</div>
+    </div>
 
 </div>
 
@@ -1347,15 +1469,51 @@ function switchTab(tab) {
     if (tab === "upcoming") loadFeatured(todayStr());
 }
 
+let _featuredCollapsed = localStorage.getItem("featuredCollapsed") === "1";
+
+function toggleFeaturedSection() {
+    _featuredCollapsed = !_featuredCollapsed;
+    localStorage.setItem("featuredCollapsed", _featuredCollapsed ? "1" : "0");
+    applyFeaturedCollapsed();
+    updateSidebarScrollHint();
+}
+
+function applyFeaturedCollapsed() {
+    const sec = document.getElementById("featured-section");
+    if (!sec) return;
+    sec.classList.toggle("collapsed", _featuredCollapsed);
+}
+
+function updateSidebarScrollHint() {
+    const box = document.getElementById("sidebar-scroll");
+    if (!box) return;
+    requestAnimationFrame(() => {
+        const overflow = box.scrollHeight > box.clientHeight + 8;
+        const atBottom = box.scrollTop >= box.scrollHeight - box.clientHeight - 6;
+        box.classList.toggle("has-more", overflow && !atBottom);
+    });
+}
+
 function renderFeatured(list) {
     const sec = document.getElementById("featured-section");
     const el  = document.getElementById("featured-matches");
+    const allLabel = document.getElementById("all-matches-label");
+    const headerLabel = document.getElementById("featured-header-label");
     if (!sec || !el) return;
     if (!list?.length) {
         sec.style.display = "none";
+        if (allLabel) allLabel.style.display = "none";
+        updateSidebarScrollHint();
         return;
     }
     sec.style.display = "block";
+    applyFeaturedCollapsed();
+    if (headerLabel) headerLabel.textContent = `⭐ Препоръчани (${list.length})`;
+    if (allLabel) {
+        allLabel.style.display = "block";
+        const n = state.filtered?.length ?? 0;
+        allLabel.textContent = n ? `Всички мачове (${n})` : "Всички мачове";
+    }
     el.innerHTML = list.map(m => {
         const id = getId(m);
         const live = isLive(m);
@@ -1370,6 +1528,7 @@ function renderFeatured(list) {
             </div>
         </div>`;
     }).join("");
+    updateSidebarScrollHint();
 }
 
 async function loadFeatured(date) {
@@ -1417,11 +1576,19 @@ function selectDateChip(dateStr) {
    LEAGUE FILTER
    ========================================================= */
 function buildLeagueFilter(list) {
-    const sel    = document.getElementById("league-filter");
+    const sel     = document.getElementById("league-filter");
     const current = sel.value;
-    const comps  = [...new Set(list.map(m => m.competition).filter(Boolean))].sort();
-    sel.innerHTML = `<option value="">Всички лиги (${list.length})</option>` +
-        comps.map(c => `<option value="${c}" ${c === current ? 'selected' : ''}>${c}</option>`).join("");
+    const comps   = [...new Set(list.map(m => m.competition).filter(Boolean))].sort();
+    const matchN  = list.length;
+    const leagueN = comps.length;
+    const allLabel = leagueN
+        ? `Всички (${matchN} мача · ${leagueN} ${leagueN === 1 ? "лига" : "лиги"})`
+        : `Всички (${matchN} мача)`;
+    sel.innerHTML = `<option value="">${allLabel}</option>` +
+        comps.map(c => {
+            const count = list.filter(m => m.competition === c).length;
+            return `<option value="${c}" ${c === current ? "selected" : ""}>${c} (${count})</option>`;
+        }).join("");
 }
 
 function filterMatches() {
@@ -1437,6 +1604,11 @@ function filterMatches() {
     });
 
     renderMatches(state.filtered);
+    const allLabel = document.getElementById("all-matches-label");
+    if (allLabel && state.featured?.length) {
+        allLabel.style.display = "block";
+        allLabel.textContent = `Всички мачове (${state.filtered.length})`;
+    }
 }
 
 function kickoffTime(m) {
@@ -1525,6 +1697,7 @@ function renderMatches(list) {
             </div>`;
         }).join("");
     }
+    updateSidebarScrollHint();
 }
 
 function buildMap(list) {
@@ -3018,6 +3191,9 @@ async function refreshUpcoming() {
 // Load both on start
 loadMatches();
 loadUpcoming();
+
+document.getElementById("sidebar-scroll")?.addEventListener("scroll", updateSidebarScrollHint);
+window.addEventListener("resize", updateSidebarScrollHint);
 
 /* =========================================================
    HELPERS
