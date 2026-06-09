@@ -240,6 +240,7 @@ class PreMatchEngine:
             results.append({
                 "fixture_id": f["fixture"]["id"],
                 "date":       f["fixture"]["date"][:10],
+                "season":     f["league"]["season"],
                 "home":       f["teams"]["home"]["name"],
                 "away":       f["teams"]["away"]["name"],
                 "home_goals": f["goals"].get("home", 0),
@@ -248,8 +249,16 @@ class PreMatchEngine:
             })
         return results
 
+    def _fixture_season(self, fixture_id: int) -> int | None:
+        raw = self._get("fixtures", {"id": fixture_id})
+        if not raw:
+            return None
+        return (raw[0].get("league") or {}).get("season")
+
     def _h2h_goal_scorers_line(self, fixture_id: int, season: int | None = None) -> str:
-        """Format goal scorers from a finished H2H fixture, e.g. 'Raúl Jiménez (23'), O. Appollis (67')'."""
+        """Format goal scorers from a finished H2H fixture, e.g. 'Raúl Jiménez (23'), Oswin Appollis (67')'."""
+        if season is None:
+            season = self._fixture_season(fixture_id)
         goals: list[dict] = []
         for ev in self._get_fixture_events_cached(fixture_id):
             if ev.get("type") != "Goal" or ev.get("detail") == "Own Goal":
@@ -1246,7 +1255,8 @@ class PreMatchEngine:
 
         h2h_latest_scorers = ""
         if h2h and h2h[0].get("fixture_id"):
-            h2h_latest_scorers = self._h2h_goal_scorers_line(h2h[0]["fixture_id"], season)
+            h2h_season = h2h[0].get("season")
+            h2h_latest_scorers = self._h2h_goal_scorers_line(h2h[0]["fixture_id"], h2h_season)
 
         # Standings
         h_stand = standings.get("home", {})
