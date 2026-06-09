@@ -713,11 +713,18 @@ class PreMatchEngine:
                 f"{m['date']} — {m['home']} {hg}:{ag} {m['away']}"
             )
 
-        avg_h2h_goals = round(total_h2h_goals / max(len(h2h[:5]), 1), 1)
+        h2h_count   = len(h2h[:5])
+        avg_h2h_goals = round(total_h2h_goals / max(h2h_count, 1), 1)
 
         # Standings
         h_stand = standings.get("home", {})
         a_stand = standings.get("away", {})
+
+        def _standings_meaningful(st: dict) -> bool:
+            """Group/table position before any match played is misleading (e.g. WC group draw)."""
+            return bool(st.get("position")) and (st.get("played") or 0) > 0
+
+        standings_reliable = _standings_meaningful(h_stand) or _standings_meaningful(a_stand)
 
         # Key advantages
         home_advantages = []
@@ -743,10 +750,11 @@ class PreMatchEngine:
         elif a_avg_c < h_avg_c and h_avg_c > 0:
             away_advantages.append(f"По-стабилна отбрана ({a_avg_c:.2f} допуснати/мач)")
 
-        if h_stand.get("position", 99) < a_stand.get("position", 99):
-            home_advantages.append(f"По-добро класиране — {h_stand.get('position')} място")
-        elif a_stand.get("position", 99) < h_stand.get("position", 99):
-            away_advantages.append(f"По-добро класиране — {a_stand.get('position')} място")
+        if standings_reliable:
+            if h_stand.get("position", 99) < a_stand.get("position", 99):
+                home_advantages.append(f"По-добро класиране — {h_stand.get('position')} място")
+            elif a_stand.get("position", 99) < h_stand.get("position", 99):
+                away_advantages.append(f"По-добро класиране — {a_stand.get('position')} място")
 
         if home_h2h_wins > away_h2h_wins:
             home_advantages.append(f"По-добра H2H история ({home_h2h_wins} победи)")
@@ -755,15 +763,18 @@ class PreMatchEngine:
 
         # Key factors
         key_factors = []
-        if avg_h2h_goals > 0:
-            key_factors.append(f"Средно {avg_h2h_goals} гола на директен двубой между двата отбора")
+        if h2h_count > 0 and avg_h2h_goals > 0:
+            if h2h_count == 1:
+                key_factors.append(f"1 директна среща, средно {avg_h2h_goals} гола между отборите")
+            else:
+                key_factors.append(f"{h2h_count} директни срещи, средно {avg_h2h_goals} гола между отборите")
         if h_avg_s > 0:
             key_factors.append(f"{home} вкарва средно {h_avg_s:.2f} гола на мач тази сезон")
         if a_avg_s > 0:
             key_factors.append(f"{away} вкарва средно {a_avg_s:.2f} гола на мач тази сезон")
-        if h_stand.get("position"):
+        if _standings_meaningful(h_stand):
             key_factors.append(f"{home} е на {h_stand['position']} място с {h_stand.get('points', 0)} точки")
-        if a_stand.get("position"):
+        if _standings_meaningful(a_stand):
             key_factors.append(f"{away} е на {a_stand['position']} място с {a_stand.get('points', 0)} точки")
         if not key_factors:
             key_factors = ["Статистически данни не са налични за тази лига в момента"]
@@ -771,11 +782,13 @@ class PreMatchEngine:
         # Prediction (weighted: form points + standings + home advantage)
         h_pts   = hs.get("wins", 0) * 3 + hs.get("draws", 0)
         a_pts   = as_.get("wins", 0) * 3 + as_.get("draws", 0)
-        h_pos   = h_stand.get("position", 10) or 10
-        a_pos   = a_stand.get("position", 10) or 10
-        # Home advantage bonus (5 pts) + better position bonus
-        h_score = h_pts + 5 + max(0, a_pos - h_pos) * 0.5
-        a_score = a_pts       + max(0, h_pos - a_pos) * 0.5
+        h_pos   = h_stand.get("position", 10) or 10 if _standings_meaningful(h_stand) else 10
+        a_pos   = a_stand.get("position", 10) or 10 if _standings_meaningful(a_stand) else 10
+        pos_bonus_h = max(0, a_pos - h_pos) * 0.5 if standings_reliable else 0
+        pos_bonus_a = max(0, h_pos - a_pos) * 0.5 if standings_reliable else 0
+        # Home advantage bonus (5 pts) + better position bonus (only when table is live)
+        h_score = h_pts + 5 + pos_bonus_h
+        a_score = a_pts + pos_bonus_a
 
         total = h_score + a_score
         if total < 5:
@@ -836,11 +849,13 @@ class PreMatchEngine:
             "h2h_raw":        h2h[:5],
             "h2h_home_wins":  home_h2h_wins,
             "h2h_away_wins":  away_h2h_wins,
+            "h2h_count":      h2h_count,
             "avg_h2h_goals":  avg_h2h_goals,
             "home_standing":  h_stand,
             "away_standing":  a_stand,
-            "home_advantages": home_advantages or ["Данните се зареждат"],
-            "away_advantages": away_advantages or ["Данните се зареждат"],
+            "standings_reliable": standings_reliable,
+            "home_advantages": home_advantages,
+            "away_advantages": away_advantages,
             "key_factors":    key_factors,
             "prediction": {
                 "home_win_pct":  home_win_pct,
@@ -897,7 +912,9 @@ class PreMatchEngine:
         ast = data.get("away_standing", {})
 
         has_form     = (hs.get("played", 0) or 0) > 0 or (as_.get("played", 0) or 0) > 0
-        has_standing = bool(hst.get("position") or ast.get("position"))
+        has_standing = (
+            (hst.get("played") or 0) > 0 or (ast.get("played") or 0) > 0
+        ) and bool(hst.get("position") or ast.get("position"))
         has_h2h      = len(data.get("h2h", [])) > 0
 
         return has_form or has_standing or has_h2h
@@ -934,7 +951,9 @@ class PreMatchEngine:
 
         # Data quality assessment
         has_stats    = (hs.get("played") or 0) > 0 or (as_.get("played") or 0) > 0
-        has_standing = bool(hst.get("position") or ast.get("position"))
+        has_standing = (
+            (hst.get("played") or 0) > 0 or (ast.get("played") or 0) > 0
+        ) and bool(hst.get("position") or ast.get("position"))
         has_h2h      = bool(data["h2h"])
         has_scorers  = bool(data.get("top_scorers", {}).get("home") or data.get("top_scorers", {}).get("away"))
         coaches      = data.get("coaches", {})
@@ -997,8 +1016,8 @@ class PreMatchEngine:
 ═══════════════════════════════════════
 
 КЛАСИРАНЕ:
-{home}: {f"{hst['position']}. място, {hst['points']} точки, {hst.get('played',0)} изиграни" if hst.get('position') else 'н/д'}
-{away}: {f"{ast['position']}. място, {ast['points']} точки, {ast.get('played',0)} изиграни" if ast.get('position') else 'н/д'}
+{home}: {f"{hst['position']}. място, {hst['points']} точки, {hst.get('played',0)} изиграни" if (hst.get('played') or 0) > 0 and hst.get('position') else 'н/д (турнирът/лигата още не е започнала)'}
+{away}: {f"{ast['position']}. място, {ast['points']} точки, {ast.get('played',0)} изиграни" if (ast.get('played') or 0) > 0 and ast.get('position') else 'н/д (турнирът/лигата още не е започнала)'}
 
 ФОРМА — последни 10 мача:
 {home}: {data['home_form']}
