@@ -1551,21 +1551,21 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
                 executor.submit(self._get_referee_data, fixture_id): "referee",
                 executor.submit(self._get_injuries, fixture_id, home_id, away_id): "injuries",
             }
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=15):
                 key = futures[future]
                 try:
-                    results[key] = future.result()
+                    results[key] = future.result(timeout=10)
                 except Exception:
                     results[key] = {} if key not in ("h2h",) else []
 
-        h2h         = results["h2h"]
-        home_stats  = results["home_stats"]
-        away_stats  = results["away_stats"]
-        standings   = results["standings"]
-        top_scorers = results["top_scorers"]
-        coaches     = results["coaches"]
-        referee     = results["referee"]
-        injuries    = results["injuries"]
+        h2h         = results.get("h2h", [])
+        home_stats  = results.get("home_stats", {})
+        away_stats  = results.get("away_stats", {})
+        standings   = results.get("standings", {})
+        top_scorers = results.get("top_scorers", {})
+        coaches     = results.get("coaches", {})
+        referee     = results.get("referee", {})
+        injuries    = results.get("injuries", {})
 
         data = self._build_rule_based(
             meta, h2h, home_stats, away_stats, standings,
@@ -1650,21 +1650,21 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
                 executor.submit(self._get_referee_data, fixture_id): "referee",
                 executor.submit(self._get_injuries, fixture_id, home_id, away_id): "injuries",
             }
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=15):
                 key = futures[future]
                 try:
-                    results[key] = future.result()
+                    results[key] = future.result(timeout=10)
                 except Exception:
                     results[key] = {} if key not in ("h2h",) else []
 
-        h2h         = results["h2h"]
-        home_stats  = results["home_stats"]
-        away_stats  = results["away_stats"]
-        standings   = results["standings"]
-        top_scorers = results["top_scorers"]
-        coaches     = results["coaches"]
-        referee     = results["referee"]
-        injuries    = results["injuries"]
+        h2h         = results.get("h2h", [])
+        home_stats  = results.get("home_stats", {})
+        away_stats  = results.get("away_stats", {})
+        standings   = results.get("standings", {})
+        top_scorers = results.get("top_scorers", {})
+        coaches     = results.get("coaches", {})
+        referee     = results.get("referee", {})
+        injuries    = results.get("injuries", {})
 
         data = self._build_rule_based(
             meta, h2h, home_stats, away_stats, standings,

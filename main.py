@@ -316,10 +316,21 @@ def build_live_intelligence(match: dict, minute: int) -> dict:
     stats = stats_collector.get_live_stats(fixture_id)
     lineups = stats_collector.get_lineups(fixture_id)
 
-    # Consider stats valid if the API returned team names (even if numeric values are 0)
+    # Consider stats valid if the API returned team names AND at least one meaningful stat
     has_api_response = bool(stats.get("home_team") or stats.get("away_team"))
-    if not has_api_response:
-        print(f"[INTELLIGENCE] No API response for fixture {fixture_id} — using simulated fallback")
+    home_stats = stats.get("home", {})
+    away_stats = stats.get("away", {})
+    has_meaningful_data = (
+        home_stats.get("possession") is not None
+        or home_stats.get("shots_total") not in (None, 0, "0")
+        or away_stats.get("possession") is not None
+        or away_stats.get("shots_total") not in (None, 0, "0")
+    )
+    if not has_api_response or not has_meaningful_data:
+        if has_api_response and not has_meaningful_data:
+            print(f"[INTELLIGENCE] API responded but stats are empty for fixture {fixture_id} — waiting for data")
+        else:
+            print(f"[INTELLIGENCE] No API response for fixture {fixture_id}")
         return {"available": False}
 
     print(f"[INTELLIGENCE] Real stats OK — home={stats.get('home_team')} away={stats.get('away_team')} | possession={stats.get('home',{}).get('possession','?')}% vs {stats.get('away',{}).get('possession','?')}% | xG={stats.get('home',{}).get('xg','?')} vs {stats.get('away',{}).get('xg','?')}")

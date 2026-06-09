@@ -15,7 +15,7 @@ HEADERS = {
 
 # In-memory cache: date_str → {ts, fixtures}
 _fixtures_cache: dict = {}
-FIXTURES_CACHE_TTL = 60  # 1 минута — paid plan: up from 2 min
+FIXTURES_CACHE_TTL = 120  # 2 минути — reduces API quota usage
 
 # ─── League whitelist ────────────────────────────────────────────────────────
 # Only show matches from these competitions.
