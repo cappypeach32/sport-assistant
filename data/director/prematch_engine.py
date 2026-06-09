@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import requests
 from datetime import datetime
@@ -490,20 +491,19 @@ class PreMatchEngine:
             assists   = stat.get("goals", {}).get("assists") or 0
             apps      = stat.get("games", {}).get("appearences") or 0
 
+            entry = {
+                "name":       player.get("name", ""),
+                "firstname":  player.get("firstname"),
+                "lastname":   player.get("lastname"),
+                "player_id":  player.get("id"),
+                "goals":      goals,
+                "assists":    assists,
+                "apps":       apps,
+            }
             if team_id == home_id:
-                result["home"].append({
-                    "name":    player.get("name", ""),
-                    "goals":   goals,
-                    "assists": assists,
-                    "apps":    apps,
-                })
+                result["home"].append(entry)
             elif team_id == away_id:
-                result["away"].append({
-                    "name":    player.get("name", ""),
-                    "goals":   goals,
-                    "assists": assists,
-                    "apps":    apps,
-                })
+                result["away"].append(entry)
 
         return result
 
@@ -514,11 +514,112 @@ class PreMatchEngine:
         self._events_cache[fixture_id] = data
         return data
 
+    @staticmethod
+    def _is_abbreviated_player_name(name: str) -> bool:
+        return bool(re.match(r"^[\w]\.\s", (name or "").strip()))
+
+    @staticmethod
+    def _player_display_name(first: str, last: str, short: str = "") -> str:
+        first = ((first or "").strip().split() or [""])[0]
+        last  = (last or "").strip()
+        short = (short or "").strip()
+        if not first:
+            if short and not PreMatchEngine._is_abbreviated_player_name(short):
+                return short
+            return short or "—"
+
+        parts = [p for p in last.split() if p]
+        if not parts:
+            return first
+
+        family = ""
+        if short and "." in short:
+            suffix = short.split(".", 1)[-1].strip()
+            for part in reversed(parts):
+                if part.casefold() == suffix.casefold():
+                    family = part
+                    break
+
+        if not family:
+            if len(parts) == 1:
+                family = parts[0]
+            elif len(parts[0]) >= 6:
+                family = parts[0]
+            else:
+                family = parts[-1]
+
+        return f"{first} {family}"
+
+    def _resolve_key_player_display_name(
+        self,
+        player_id: int | None,
+        names: set[str] | list[str],
+        season: int | None,
+        fallback: str = "",
+    ) -> str:
+        seen = {n.strip() for n in (names or []) if n and n.strip()}
+        if fallback:
+            seen.add(fallback.strip())
+
+        abbreviated = [n for n in seen if self._is_abbreviated_player_name(n)]
+        short_hint  = abbreviated[0] if abbreviated else (fallback or "")
+
+        if player_id:
+            params: dict = {"id": player_id}
+            if season:
+                params["season"] = season
+            raw = self._get("players", params)
+            if raw:
+                profile = raw[0].get("player", raw[0])
+                display = self._player_display_name(
+                    profile.get("firstname"),
+                    profile.get("lastname"),
+                    short_hint or profile.get("name") or fallback,
+                )
+                if display and display != "—":
+                    return display
+
+        full_candidates = [n for n in seen if not self._is_abbreviated_player_name(n)]
+        if full_candidates:
+            best = max(full_candidates, key=len)
+            parts = best.split()
+            if len(parts) >= 2:
+                return f"{parts[0]} {parts[-1]}"
+            return best
+
+        if fallback:
+            return fallback
+        return max(seen, key=len) if seen else "—"
+
+    @staticmethod
+    def _player_tally_key(player_id: int | None, name: str) -> str:
+        if player_id:
+            return f"id:{player_id}"
+        return f"name:{(name or '').strip()}"
+
+    def _touch_player_tally(
+        self,
+        tallies: dict[str, dict],
+        player_id: int | None,
+        name: str,
+    ) -> str:
+        key = self._player_tally_key(player_id, name)
+        tallies.setdefault(key, {
+            "goals": 0, "assists": 0, "apps": 0,
+            "player_id": player_id, "names": set(),
+        })
+        if player_id:
+            tallies[key]["player_id"] = player_id
+        if name:
+            tallies[key]["names"].add(name)
+        return key
+
     def _get_key_players_from_recent(
         self,
         team_id: int,
         match_limit: int = 10,
         player_limit: int = 4,
+        season: int | None = None,
     ) -> list:
         """
         Aggregate goals + assists from recent official matches (not squad order).
@@ -527,6 +628,9 @@ class PreMatchEngine:
         official = [f for f in raw if not self._is_friendly_fixture(f)][:match_limit]
         if not official:
             return []
+
+        if season is None:
+            season = (official[0].get("league") or {}).get("season")
 
         tallies: dict[str, dict] = {}
 
@@ -540,24 +644,32 @@ class PreMatchEngine:
                 if ev_team != team_id:
                     continue
 
-                player_name = (ev.get("player") or {}).get("name", "") or ""
-                assist_name = (ev.get("assist") or {}).get("name", "") or ""
-                if player_name:
-                    appeared.add(player_name)
-                if assist_name:
-                    appeared.add(assist_name)
+                player = ev.get("player") or {}
+                assist = ev.get("assist") or {}
+                player_id   = player.get("id")
+                assist_id   = assist.get("id")
+                player_name = player.get("name", "") or ""
+                assist_name = assist.get("name", "") or ""
+
+                if player_name or player_id:
+                    appeared.add(self._player_tally_key(player_id, player_name))
+                if assist_name or assist_id:
+                    appeared.add(self._player_tally_key(assist_id, assist_name))
 
                 if ev.get("type") == "Goal" and ev.get("detail") != "Own Goal":
-                    if player_name:
-                        tallies.setdefault(player_name, {"goals": 0, "assists": 0, "apps": 0})
-                        tallies[player_name]["goals"] += 1
-                if assist_name:
-                    tallies.setdefault(assist_name, {"goals": 0, "assists": 0, "apps": 0})
-                    tallies[assist_name]["assists"] += 1
+                    if player_name or player_id:
+                        key = self._touch_player_tally(tallies, player_id, player_name)
+                        tallies[key]["goals"] += 1
+                if assist_name or assist_id:
+                    key = self._touch_player_tally(tallies, assist_id, assist_name)
+                    tallies[key]["assists"] += 1
 
-            for name in appeared:
-                tallies.setdefault(name, {"goals": 0, "assists": 0, "apps": 0})
-                tallies[name]["apps"] += 1
+            for key in appeared:
+                tallies.setdefault(key, {
+                    "goals": 0, "assists": 0, "apps": 0,
+                    "player_id": None, "names": set(),
+                })
+                tallies[key]["apps"] += 1
 
         if not tallies:
             return []
@@ -569,11 +681,18 @@ class PreMatchEngine:
         )
 
         players: list[dict] = []
-        for name, st in ranked[: max(player_limit, 8)]:
+        for _key, st in ranked[: max(player_limit, 8)]:
             if st["goals"] == 0 and st["assists"] == 0:
                 continue
+            fallback = max(st["names"], key=len) if st.get("names") else ""
+            display_name = self._resolve_key_player_display_name(
+                st.get("player_id"),
+                st.get("names") or set(),
+                season,
+                fallback,
+            )
             players.append({
-                "name":           name,
+                "name":           display_name,
                 "goals":          st["goals"],
                 "assists":        st["assists"],
                 "apps":           st["apps"],
@@ -629,6 +748,7 @@ class PreMatchEngine:
         league_players: list,
         team_id: int,
         limit: int = 4,
+        season: int | None = None,
     ) -> list:
         if league_players:
             sorted_p = sorted(
@@ -638,8 +758,20 @@ class PreMatchEngine:
             )
             players = []
             for p in sorted_p[:limit]:
+                first = (p.get("firstname") or "").strip()
+                last  = (p.get("lastname") or "").strip()
+                short = p.get("name", "") or ""
+                if first and last:
+                    display = self._player_display_name(first, last, short)
+                else:
+                    display = self._resolve_key_player_display_name(
+                        p.get("player_id"),
+                        {short},
+                        season,
+                        short,
+                    )
                 players.append({
-                    "name":    p.get("name", ""),
+                    "name":    display,
                     "goals":   p.get("goals") or 0,
                     "assists": p.get("assists") or 0,
                     "apps":    p.get("apps") or 0,
@@ -647,13 +779,25 @@ class PreMatchEngine:
                 })
             return self._finalize_key_players(players)
 
-        return self._get_key_players_from_recent(team_id, player_limit=limit)
+        return self._get_key_players_from_recent(
+            team_id, player_limit=limit, season=season,
+        )
 
-    def _enrich_key_players(self, top_scorers: dict, home_id: int, away_id: int) -> dict:
+    def _enrich_key_players(
+        self,
+        top_scorers: dict,
+        home_id: int,
+        away_id: int,
+        season: int | None = None,
+    ) -> dict:
         """League topscorers when available; else real stats from recent official matches."""
         return {
-            "home": self._resolve_team_key_players(top_scorers.get("home") or [], home_id),
-            "away": self._resolve_team_key_players(top_scorers.get("away") or [], away_id),
+            "home": self._resolve_team_key_players(
+                top_scorers.get("home") or [], home_id, season=season,
+            ),
+            "away": self._resolve_team_key_players(
+                top_scorers.get("away") or [], away_id, season=season,
+            ),
         }
 
     @staticmethod
@@ -1897,7 +2041,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         away_stats  = results.get("away_stats", {})
         standings   = results.get("standings", {})
         top_scorers = self._enrich_key_players(
-            results.get("top_scorers", {}), home_id, away_id,
+            results.get("top_scorers", {}), home_id, away_id, season=season,
         )
         coaches     = results.get("coaches", {})
         referee     = results.get("referee", {})
@@ -2002,7 +2146,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         away_stats  = results.get("away_stats", {})
         standings   = results.get("standings", {})
         top_scorers = self._enrich_key_players(
-            results.get("top_scorers", {}), home_id, away_id,
+            results.get("top_scorers", {}), home_id, away_id, season=season,
         )
         coaches     = results.get("coaches", {})
         referee     = results.get("referee", {})
