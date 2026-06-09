@@ -228,12 +228,59 @@
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
 
+  function initResponsiveSidebar() {
+    const sidebar = document.getElementById("sidebar");
+    const toggle = document.getElementById("sidebar-toggle");
+    const backdrop = document.getElementById("sidebar-backdrop");
+    if (!sidebar || !toggle) return;
+
+    const MQ = window.matchMedia("(max-width: 960px)");
+
+    function isDrawer() {
+      return MQ.matches;
+    }
+
+    function setOpen(open) {
+      sidebar.classList.toggle("open", open);
+      if (backdrop) backdrop.classList.toggle("show", open);
+      document.body.classList.toggle("sidebar-open", open && isDrawer());
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    function closeSidebar() {
+      setOpen(false);
+    }
+
+    function openSidebar() {
+      if (isDrawer()) setOpen(true);
+    }
+
+    toggle.addEventListener("click", () => {
+      setOpen(!sidebar.classList.contains("open"));
+    });
+
+    if (backdrop) {
+      backdrop.addEventListener("click", closeSidebar);
+    }
+
+    MQ.addEventListener("change", () => {
+      if (!isDrawer()) closeSidebar();
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeSidebar();
+    });
+
+    window.ResponsiveLayout = { closeSidebar, openSidebar, isDrawer };
+  }
+
   function init() {
     document.body.classList.add("tablet-mode");
     applyFontScale(getScale());
     registerServiceWorker();
     updateAlertsBtn();
     updateWakeBtn();
+    initResponsiveSidebar();
 
     if (wakeOn) acquireWakeLock();
 

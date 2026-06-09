@@ -1,0 +1,372 @@
+/* ============================================================
+   Responsive layout — overlay + commentator
+   Full tablet, split-screen, narrow portrait
+   ============================================================ */
+
+:root {
+    --sidebar-w: 300px;
+    --main-pad: 20px;
+    --card-pad-y: 16px;
+    --card-pad-x: 18px;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+}
+
+/* ----- Utility grids (replace inline styles) ----- */
+.grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+.grid-2.tight { gap: 10px; }
+.grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+}
+
+/* ----- Fluid typography ----- */
+.match-score {
+    font-size: clamp(1.65rem, 4vw + 0.75rem, 2.25rem) !important;
+    letter-spacing: clamp(2px, 0.5vw, 4px) !important;
+}
+.team-name {
+    font-size: clamp(0.85rem, 1.5vw + 0.55rem, 1.125rem) !important;
+}
+.momentum-pct {
+    font-size: clamp(1.2rem, 3vw + 0.5rem, 1.75rem) !important;
+}
+.pred-value {
+    font-size: clamp(1rem, 2vw + 0.5rem, 1.375rem) !important;
+}
+.pred-score .pred-value {
+    font-size: clamp(1.1rem, 2.5vw + 0.5rem, 1.625rem) !important;
+}
+.card-label {
+    font-size: clamp(0.75rem, 1vw + 0.5rem, 1.0625rem) !important;
+}
+
+/* ----- Sidebar toggle (hidden on wide screens) ----- */
+.sidebar-toggle {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    color: #e8eaf0;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    min-height: 44px;
+    width: 100%;
+    max-width: 220px;
+}
+.sidebar-toggle:active {
+    background: rgba(0, 255, 153, 0.12);
+    border-color: rgba(0, 255, 153, 0.35);
+}
+.sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 198;
+    -webkit-tap-highlight-color: transparent;
+}
+.sidebar-backdrop.show { display: block; }
+
+/* ----- Medium-wide: narrower sidebar ----- */
+@media (max-width: 1200px) {
+    :root {
+        --sidebar-w: 260px;
+        --main-pad: 16px;
+    }
+}
+
+@media (max-width: 1024px) {
+    :root {
+        --sidebar-w: 240px;
+        --main-pad: 14px;
+        --card-pad-x: 14px;
+    }
+
+    .bet-markets-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .prediction-block {
+        flex-wrap: wrap;
+    }
+    .pred-item,
+    .pred-score {
+        min-width: calc(50% - 6px);
+    }
+}
+
+/* ----- Split-screen / narrow tablet: drawer sidebar ----- */
+@media (max-width: 960px) {
+    :root {
+        --main-pad: 12px;
+        --card-pad-y: 14px;
+        --card-pad-x: 12px;
+    }
+
+    body.tablet-overlay .layout {
+        flex-direction: row;
+    }
+
+    body.tablet-overlay .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        z-index: 200;
+        width: min(88vw, 320px);
+        min-width: 0;
+        max-width: 320px;
+        padding-top: calc(14px + var(--safe-top));
+        padding-bottom: calc(14px + var(--safe-bottom));
+        padding-left: calc(14px + var(--safe-left));
+        transform: translateX(-105%);
+        transition: transform 0.28s ease;
+        box-shadow: none;
+    }
+
+    body.tablet-overlay .sidebar.open {
+        transform: translateX(0);
+        box-shadow: 4px 0 28px rgba(0, 0, 0, 0.55);
+    }
+
+    body.tablet-overlay .main {
+        flex: 1;
+        width: 100%;
+        min-width: 0;
+        padding: calc(var(--main-pad) + var(--safe-top)) calc(var(--main-pad) + var(--safe-right)) calc(var(--main-pad) + var(--safe-bottom)) calc(var(--main-pad) + var(--safe-left));
+    }
+
+    .sidebar-toggle {
+        display: flex;
+    }
+
+    .sidebar-title::after {
+        content: " · ☰";
+        opacity: 0.5;
+        font-size: 0.85em;
+    }
+
+    /* Collapse multi-column blocks */
+    .prematch-header,
+    .advantages-grid,
+    .tactical-grid,
+    .lineups-grid,
+    .grid-2 {
+        grid-template-columns: 1fr !important;
+    }
+
+    .bet-markets-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .prediction-block {
+        flex-direction: column;
+    }
+    .pred-item,
+    .pred-score {
+        min-width: 100%;
+    }
+
+    .match-header {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 10px;
+    }
+    .team-block {
+        min-width: 0;
+        flex: 1 1 40%;
+    }
+    .match-center {
+        flex: 1 1 100%;
+        order: -1;
+    }
+
+    .h2h-row {
+        flex-wrap: wrap;
+        gap: 4px;
+        justify-content: center;
+        text-align: center;
+    }
+    .h2h-date {
+        flex: 1 1 100%;
+        min-width: 0;
+        font-size: 12px;
+    }
+    .h2h-team {
+        flex: 1 1 35%;
+        font-size: 13px;
+    }
+    .h2h-score {
+        flex: 0 0 auto;
+        padding: 0 6px;
+    }
+
+    .momentum-deltas {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .broadcast-section-header {
+        font-size: 13px;
+        padding: 12px 10px;
+    }
+    .broadcast-body-inner {
+        font-size: 14px;
+    }
+
+    .day-agenda-row {
+        flex-wrap: wrap;
+    }
+    .day-agenda-teams {
+        flex: 1 1 100%;
+        margin-top: 2px;
+    }
+}
+
+/* ----- Very narrow (split-screen half on phone / small tablet) ----- */
+@media (max-width: 640px) {
+    :root {
+        --main-pad: 10px;
+        --card-pad-y: 12px;
+        --card-pad-x: 10px;
+    }
+
+    .card {
+        padding: var(--card-pad-y) var(--card-pad-x);
+        border-radius: 12px;
+    }
+
+    .bet-markets-grid,
+    .grid-3 {
+        grid-template-columns: 1fr !important;
+    }
+
+    .stats-table td {
+        font-size: 14px;
+        padding: 5px 2px;
+    }
+    .stat-label {
+        font-size: 11px;
+    }
+
+    .sidebar-tools-row {
+        flex-direction: column;
+    }
+
+    .health-bar {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .tablet-bar {
+        justify-content: center;
+    }
+
+    .preflight-checklist {
+        font-size: 12px;
+    }
+
+    .match-meta,
+    .match-teams {
+        font-size: 15px;
+    }
+
+    .top-bar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+/* ----- Ultra-narrow ----- */
+@media (max-width: 400px) {
+    .sidebar-toggle {
+        max-width: none;
+    }
+
+    .match-score {
+        letter-spacing: 1px !important;
+    }
+
+    .bp-score-lg {
+        font-size: clamp(1.75rem, 8vw, 2.5rem) !important;
+    }
+}
+
+/* ----- Commentator view ----- */
+body.tablet-commentator {
+    padding-left: calc(24px + var(--safe-left));
+    padding-right: calc(24px + var(--safe-right));
+    padding-top: calc(20px + var(--safe-top));
+    padding-bottom: calc(40px + var(--safe-bottom));
+}
+
+@media (max-width: 960px) {
+    body.tablet-commentator {
+        padding: calc(14px + var(--safe-top)) calc(12px + var(--safe-right)) calc(24px + var(--safe-bottom)) calc(12px + var(--safe-left));
+    }
+
+    body.tablet-commentator .score {
+        font-size: clamp(2rem, 10vw, 3.5rem) !important;
+    }
+
+    body.tablet-commentator .teams {
+        font-size: clamp(1.1rem, 4vw, 1.75rem) !important;
+    }
+
+    body.tablet-commentator .point-title {
+        font-size: clamp(1rem, 3vw, 1.35rem) !important;
+    }
+
+    body.tablet-commentator .point-text,
+    body.tablet-commentator .narrative {
+        font-size: clamp(0.95rem, 2.8vw, 1.25rem) !important;
+    }
+
+    body.tablet-commentator .top-bar {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    body.tablet-commentator .tablet-bar {
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 640px) {
+    body.tablet-commentator .alert-btn {
+        width: 100%;
+    }
+}
+
+/* Apply sidebar width variable on overlay */
+body.tablet-overlay .sidebar {
+    width: var(--sidebar-w);
+    min-width: var(--sidebar-w);
+}
+
+@media (min-width: 961px) {
+    body.tablet-overlay .sidebar {
+        transform: none !important;
+    }
+}
+
+body.tablet-overlay .main {
+    padding: var(--main-pad);
+}
+
+body.tablet-overlay.sidebar-open {
+    overflow: hidden;
+}

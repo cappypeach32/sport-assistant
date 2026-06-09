@@ -9,6 +9,7 @@
 <link rel="manifest" href="/static/manifest.webmanifest"/>
 <link rel="apple-touch-icon" href="/static/icon.svg"/>
 <link rel="stylesheet" href="/static/tablet.css"/>
+<link rel="stylesheet" href="/static/responsive.css"/>
 <title>AI Sports Broadcast</title>
 <style>
 
@@ -44,8 +45,8 @@ body {
 
 /* ===== SIDEBAR ===== */
 .sidebar {
-    width: 300px;
-    min-width: 300px;
+    width: var(--sidebar-w, 300px);
+    min-width: var(--sidebar-w, 300px);
     background: var(--surface);
     border-right: 1px solid var(--border);
     display: flex;
@@ -1110,6 +1111,7 @@ body {
     gap: 16px;
 }
 @media (max-width: 700px) { .lineups-grid { grid-template-columns: 1fr; } }
+/* Responsive breakpoints: static/responsive.css */
 .lineup-side-title {
     font-size: 13px;
     font-weight: 800;
@@ -1146,12 +1148,13 @@ body {
 </head>
 
 <body class="tablet-overlay">
+<div class="sidebar-backdrop" id="sidebar-backdrop" aria-hidden="true"></div>
 <div class="layout">
 
 <!-- =========================================================
      SIDEBAR — MATCH LIST
      ========================================================= -->
-<div class="sidebar">
+<div class="sidebar" id="sidebar">
 
     <div class="sidebar-header">
         <div class="sidebar-title">Мачове</div>
@@ -1245,6 +1248,10 @@ body {
      MAIN PANEL
      ========================================================= -->
 <div class="main" id="main-panel">
+
+    <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-expanded="false" aria-controls="sidebar">
+        ☰ Мачове
+    </button>
 
     <!-- WAITING STATE -->
     <div class="waiting-state" id="waiting-state">
@@ -1841,6 +1848,10 @@ function selectMatch(id) {
     const cachedPrematch = state.prematchByFixture[id];
     state.selectedId = id;
     _lastPhase = "";
+
+    if (window.ResponsiveLayout?.isDrawer?.()) {
+        window.ResponsiveLayout.closeSidebar();
+    }
 
     renderMatches(state.filtered.length ? state.filtered : state.all);
     renderFeatured(state.featured);
@@ -2585,7 +2596,7 @@ function renderRefereeCard(ref) {
         <div class="card-label" style="margin-bottom:8px;color:var(--yellow,#eab308)"><span class="dot" style="background:var(--yellow,#eab308)"></span> Съдия</div>
         <div style="font-size:14px;font-weight:700;margin-bottom:6px">${ref.name}</div>
         ${ref.cards_profile ? `<div style="font-size:12px;color:var(--muted);margin-bottom:8px;line-height:1.45">🟨 ${ref.cards_profile}</div>` : ''}
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:12px">
+        <div class="grid-3" style="font-size:12px">
             ${ref.games_this_season ? `<div style="text-align:center"><div style="color:var(--muted)">Игри</div><div style="font-weight:700">${ref.games_this_season}</div></div>` : ''}
             ${ref.avg_yellow != null ? `<div style="text-align:center"><div style="color:var(--muted)">Ж.карт/игра</div><div style="font-weight:700;color:var(--yellow,#eab308)">${ref.avg_yellow}</div></div>` : ''}
             ${ref.avg_red != null ? `<div style="text-align:center"><div style="color:var(--muted)">Ч.карт/игра</div><div style="font-weight:700;color:var(--red,#ef4444)">${ref.avg_red}</div></div>` : ''}
@@ -2624,7 +2635,7 @@ function renderInjuryCard(injuries, home, away) {
     return `
     <div style="background:var(--surface2);border-radius:8px;padding:10px 14px;border-left:3px solid var(--red,#ef4444)">
         <div class="card-label" style="margin-bottom:8px;color:var(--red,#ef4444)"><span class="dot" style="background:var(--red,#ef4444)"></span> Контузени и наказани</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="grid-2">
             <div>
                 <div style="font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:700">${home}</div>
                 ${injuries.home?.length ? render(injuries.home) : '<div style="font-size:12px;color:var(--muted)">Всички са готови ✓</div>'}
@@ -2807,7 +2818,7 @@ function renderTableImpact(data) {
     if (title) title.textContent = `Влияние — ако ${ti.result_label}`;
 
     if (body) body.innerHTML = `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px">
+        <div class="grid-2" style="margin-top:6px">
             <div style="background:var(--surface3,#1e1e2e);border-radius:8px;padding:10px">
                 <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:700">${h.name}</div>
                 <div style="font-size:13px;margin-bottom:4px">
@@ -3045,7 +3056,7 @@ function renderPrematch(data) {
 
         <!-- Coaches -->
         ${(pm.coaches?.home || pm.coaches?.away) ? `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px">
+        <div class="grid-2" style="margin-bottom:8px">
             <div>
                 <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">🎽 Треньор</div>
                 <div style="font-size:14px;font-weight:700;color:var(--text);margin-top:4px;line-height:1.35">${pm.coaches?.home || '—'}</div>
@@ -3060,7 +3071,7 @@ function renderPrematch(data) {
         ${(pm.top_scorers?.home?.length || pm.top_scorers?.away?.length) ? `
         <div>
             <div class="card-label" style="margin-bottom:8px"><span class="dot"></span> Ключови играчи${(pm.top_scorers.home || []).some(p => p.source === 'recent_matches') || (pm.top_scorers.away || []).some(p => p.source === 'recent_matches') ? ' (последни официални мачове)' : ' (сезон в лигата)'}</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="grid-2 tight">
                 <div>
                     ${(pm.top_scorers.home || []).map(p => `
                     <div style="padding:8px 0;border-bottom:1px solid var(--border)">
