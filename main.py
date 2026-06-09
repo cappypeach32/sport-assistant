@@ -639,6 +639,8 @@ def build_overlay_response(
             "injuries":        pm_data.get("injuries", {"home": [], "away": []}),
             "fingerprint":     pm_data.get("fingerprint", ""),
             "analyzed_at":     pm_data.get("analyzed_at", ""),
+            "broadcast_guide_draft": pm_data.get("broadcast_guide_draft", ""),
+            "gpt_guide_pending":   pm_data.get("gpt_guide_pending", False),
         },
 
         "table_impact":      table_impact,

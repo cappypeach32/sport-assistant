@@ -2884,7 +2884,7 @@ function renderPrematch(data) {
     }
 
     // Skip full re-render if prematch data hasn't changed (prevents flicker)
-    const renderKey = `${home}|${away}|${pm.home_form}|${pm.away_form}|${pm.prediction?.home_win_pct}|${pm.fingerprint}|${(pm.gpt_narrative||"").length}|${pm.h2h_latest_scorers}`;
+    const renderKey = `${home}|${away}|${pm.home_form}|${pm.away_form}|${pm.prediction?.home_win_pct}|${pm.fingerprint}|${(pm.gpt_narrative||"").length}|${(pm.broadcast_guide_draft||"").length}|${pm.gpt_guide_pending}|${pm.h2h_latest_scorers}`;
     if (_prematchRenderedKey === renderKey) return;
     _prematchRenderedKey = renderKey;
 
@@ -3085,16 +3085,31 @@ function renderPrematch(data) {
         ${(pm.injuries?.home?.length || pm.injuries?.away?.length) ? renderInjuryCard(pm.injuries, home, away) : ''}
 
         <!-- GPT Broadcast Guide -->
-        ${pm.gpt_narrative ? renderBroadcastGuide(pm.gpt_narrative, home, away) : `
+        ${(() => {
+            const guideText = pm.gpt_narrative || pm.broadcast_guide_draft || "";
+            const guidePending = pm.gpt_guide_pending && !pm.gpt_narrative;
+            if (guideText) {
+                return `
+                ${guidePending ? `
+                <div style="padding:10px 14px;margin-bottom:10px;background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.35);border-radius:8px;font-size:12px;color:var(--yellow,#eab308);line-height:1.45">
+                    ⏳ <strong>Моментален guide от API данни.</strong> Пълният AI текст се генерира (~15–30 сек) и ще се обнови автоматично.
+                </div>` : (pm.gpt_narrative ? `
+                <div style="padding:8px 14px;margin-bottom:10px;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.3);border-radius:8px;font-size:12px;color:var(--purple);line-height:1.45">
+                    ✓ AI Broadcast Guide (кеширан до края на деня)
+                </div>` : "")}
+                ${renderBroadcastGuide(guideText, home, away)}`;
+            }
+            return `
         <div class="gpt-loading-indicator" style="padding:14px 16px;background:var(--surface2);border-radius:10px;border-left:3px solid var(--purple)">
             <div style="display:flex;align-items:center;gap:10px">
                 <div class="loading-spinner"></div>
                 <div>
-                    <div style="font-size:14px;font-weight:700;color:var(--purple);margin-bottom:3px">AI Broadcast Guide се генерира...</div>
-                    <div style="font-size:12px;color:var(--muted)">Първият път ~15-30 сек. След това се кешира — повторен избор е мигновен.</div>
+                    <div style="font-size:14px;font-weight:700;color:var(--purple);margin-bottom:3px">Данните се зареждат...</div>
+                    <div style="font-size:12px;color:var(--muted)">Статистиката идва от API-Football (~3–5 сек).</div>
                 </div>
             </div>
-        </div>`}
+        </div>`;
+        })()}
 
         <!-- Prediction -->
         ${pred.home_win_pct !== undefined ? `

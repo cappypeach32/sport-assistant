@@ -165,8 +165,10 @@ body {
     </div>
 
     <div class="section" id="sec-prematch" style="display:none">
-        <div class="section-label">Говорни точки (преди старт)</div>
-        <div id="prematch-points"></div>
+        <div class="section-label">Broadcast guide (преди старт)</div>
+        <div id="prematch-guide-status" style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem"></div>
+        <div id="prematch-guide-sections"></div>
+        <div id="prematch-points" style="display:none"></div>
     </div>
 </div>
 
@@ -187,6 +189,16 @@ function extractTalkingPoints(narrative) {
         if (hit) points.push({ title: hit[1].replace(/\*\*/g, "").trim(), text: hit[2].trim() });
     }
     return points.slice(0, 5);
+}
+
+function extractGuideSections(narrative) {
+    if (!narrative) return [];
+    return narrative.split(/\n## /).filter(Boolean).map(block => {
+        const nl = block.indexOf("\n");
+        const title = (nl > 0 ? block.slice(0, nl) : block).replace(/^## /, "").trim();
+        const body  = nl > 0 ? block.slice(nl + 1).trim() : "";
+        return { title, body };
+    });
 }
 
 function update(data) {
@@ -277,17 +289,35 @@ function update(data) {
         ptsSec.style.display = "none";
     }
 
-    const pmPts = extractTalkingPoints(data.prematch?.gpt_narrative || "");
+    const pm = data.prematch || {};
+    const guideText = pm.gpt_narrative || pm.broadcast_guide_draft || "";
     const pmSec = document.getElementById("sec-prematch");
-    if (pmPts.length && data.phase === "prematch") {
+    const guideEl = document.getElementById("prematch-guide-sections");
+    const statusEl = document.getElementById("prematch-guide-status");
+
+    if (guideText && data.phase === "prematch" && pmSec && guideEl) {
         pmSec.style.display = "block";
-        document.getElementById("prematch-points").innerHTML = pmPts.map(p => `
+        const pending = pm.gpt_guide_pending && !pm.gpt_narrative;
+        if (statusEl) {
+            statusEl.textContent = pending
+                ? "⏳ Моментален guide от API — AI текстът се генерира..."
+                : (pm.gpt_narrative ? "✓ AI Broadcast Guide" : "Guide от API данни");
+        }
+        guideEl.innerHTML = extractGuideSections(guideText).map(s => `
             <div class="point">
-                <div class="point-title">${p.title}</div>
-                <div class="point-text">${p.text}</div>
+                <div class="point-title">${s.title}</div>
+                <div class="point-text">${s.body.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\n/g, "<br>")}</div>
             </div>`).join("");
-    } else {
+    } else if (pmSec) {
         pmSec.style.display = "none";
+    }
+
+    const pmPts = extractTalkingPoints(guideText);
+    const ptsWrap = document.getElementById("prematch-points");
+    if (pmPts.length && data.phase === "prematch" && ptsWrap) {
+        ptsWrap.style.display = "none";
+    } else if (ptsWrap) {
+        ptsWrap.style.display = "none";
     }
 
     TabletMode.checkAlerts(data);

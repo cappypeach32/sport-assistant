@@ -176,6 +176,8 @@ class PreMatchEngine:
         cached = self._get_cached_narrative(fixture_id)
         if cached:
             data["gpt_narrative"] = cached
+            data["broadcast_guide_draft"] = ""
+            data["gpt_guide_pending"] = False
 
     # --------------------------------------------------
     # API HELPERS
@@ -668,6 +670,16 @@ class PreMatchEngine:
         if season is None:
             season = (official[0].get("league") or {}).get("season")
 
+        from concurrent.futures import ThreadPoolExecutor
+        fixture_ids = [
+            f.get("fixture", {}).get("id")
+            for f in official
+            if f.get("fixture", {}).get("id")
+        ]
+        if fixture_ids:
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                list(executor.map(self._get_fixture_events_cached, fixture_ids))
+
         tallies: dict[str, dict] = {}
 
         for fixture in official:
@@ -1155,11 +1167,6 @@ class PreMatchEngine:
             return {}
         return {"available": True, "bullets": bullets}
 
-    def _finalize_prematch_data(self, data: dict) -> dict:
-        data["analyzed_at"] = datetime.now(timezone.utc).isoformat()
-        data["fingerprint"] = self.compute_data_fingerprint(data)
-        return data
-
     @staticmethod
     def compute_data_fingerprint(data: dict) -> str:
         """Stable hash of key prematch fields — used to detect stale client cache."""
@@ -1430,6 +1437,154 @@ class PreMatchEngine:
             "full_table":     standings.get("full_table", []),
         }
 
+    @staticmethod
+    def _build_instant_broadcast_guide(data: dict) -> str:
+        """
+        Rule-based broadcast guide — same section structure as GPT, filled from API data.
+        Shown immediately while GPT generates (~15-30s).
+        """
+        home   = data.get("home", "Домакин")
+        away   = data.get("away", "Гост")
+        league = data.get("league", "")
+        date   = data.get("date", "—")
+        hs     = data.get("home_stats") or {}
+        as_    = data.get("away_stats") or {}
+        hst    = data.get("home_standing") or {}
+        ast    = data.get("away_standing") or {}
+        pred   = data.get("prediction") or {}
+        coaches = data.get("coaches") or {}
+
+        def _form_block(team: str, stats: dict) -> str:
+            if not (stats.get("played") or 0):
+                return f"Статистиката за {team} не е налична в момента."
+            scope = stats.get("source_label") or "последните мачове"
+            avg_s = stats.get("avg_score")
+            avg_c = stats.get("avg_conc")
+            avg_s_txt = f"{avg_s:.2f}" if avg_s is not None else "—"
+            avg_c_txt = f"{avg_c:.2f}" if avg_c is not None else "—"
+            return (
+                f"Форма ({scope}): {stats.get('wins', 0)}П {stats.get('draws', 0)}Р "
+                f"{stats.get('losses', 0)}З · голове {stats.get('scored', 0)}:"
+                f"{stats.get('conceded', 0)} · средно {avg_s_txt} вкарани / {avg_c_txt} допуснати на мач."
+            )
+
+        def _scorer_lines(side: str) -> str:
+            players = (data.get("top_scorers") or {}).get(side) or []
+            if not players:
+                return "• Данните не са налични"
+            return "\n".join(
+                f"• {p.get('name', '?')} — {p.get('label') or 'няма статистика'}"
+                for p in players
+            )
+
+        def _adv_lines(side: str) -> str:
+            adv = (data.get("home_advantages") if side == "home" else data.get("away_advantages")) or []
+            if not adv:
+                return "• Няма изразено статистическо предимство в данните"
+            return "\n".join(f"• {a}" for a in adv[:4])
+
+        h2h_lines = []
+        for factor in (data.get("key_factors") or []):
+            if "H2H" in factor or "директ" in factor.lower() or "срещ" in factor.lower():
+                h2h_lines.append(f"• {factor}")
+        if data.get("h2h_latest_scorers"):
+            h2h_lines.append(f"• {data['h2h_latest_scorers']}")
+        for row in (data.get("h2h") or [])[:4]:
+            h2h_lines.append(f"• {row}")
+        if not h2h_lines:
+            h2h_lines.append("• H2H данни не са налични")
+
+        talking = []
+        for i, factor in enumerate((data.get("key_factors") or [])[:5], 1):
+            talking.append(f"{i}. **Тема {i}**: {factor}")
+        if not talking:
+            talking.append(f"1. **Контекст**: {home} срещу {away} в {league} на {date}.")
+
+        if (hst.get("played") or 0) > 0 and hst.get("position"):
+            h_rank = f"{hst['position']}. място, {hst.get('points', 0)} т."
+        else:
+            h_rank = "класирането още не е стартирало"
+        if (ast.get("played") or 0) > 0 and ast.get("position"):
+            a_rank = f"{ast['position']}. място, {ast.get('points', 0)} т."
+        else:
+            a_rank = "класирането още не е стартирало"
+
+        coach_bit = ""
+        if coaches.get("home") or coaches.get("away"):
+            coach_bit = (
+                f" Треньори: {coaches.get('home', '—')} ({home}) · "
+                f"{coaches.get('away', '—')} ({away})."
+            )
+
+        ref = data.get("referee") or {}
+        ref_bit = f" Съдия: {ref['name']} ({ref['cards_profile']})." if ref.get("name") and ref.get("cards_profile") else ""
+
+        scenarios = (data.get("group_scenarios") or {}).get("bullets") or []
+        scenario_bit = ""
+        if scenarios:
+            scenario_bit = " Сценарии: " + " | ".join(scenarios[:2])
+
+        intro = (
+            f"{league}, {date}: {home} срещу {away}.{coach_bit}{ref_bit} "
+            f"Класиране: {home} — {h_rank}; {away} — {a_rank}.{scenario_bit}"
+        )
+
+        winner = home if (pred.get("home_win_pct") or 0) >= max(
+            pred.get("draw_pct") or 0, pred.get("away_win_pct") or 0,
+        ) else (
+            away if (pred.get("away_win_pct") or 0) >= (pred.get("draw_pct") or 0) else "Равен"
+        )
+
+        return f"""## УВОД ЗА СТРИЙМА
+{intro}
+
+## ФОРМА И МОМЕНТ
+### {home}
+{_form_block(home, hs)}
+### {away}
+{_form_block(away, as_)}
+
+## КЛЮЧОВИ ИГРАЧИ ЗА НАБЛЮДЕНИЕ
+### {home}
+{_scorer_lines("home")}
+### {away}
+{_scorer_lines("away")}
+
+## ТАКТИЧЕСКИ РАЗБОР
+### Как ще играе {home}?
+{_adv_lines("home")}
+### Как ще играе {away}?
+{_adv_lines("away")}
+### Ключовото тактическо противостоение
+• Дуелът между атакуващия потенциал и отбраната ще определи мача — виж формата и H2H по-горе.
+
+## ГОВОРНИ ТОЧКИ ЗА СТРИЙМА
+{chr(10).join(talking)}
+
+## ИСТОРИЧЕСКИ ФАКТИ
+{chr(10).join(h2h_lines)}
+
+## ОЧАКВАНЕ ЗА МАЧА
+Очаквани общо голове (статистически модел): {pred.get('exp_goals', '—')}.
+Моделът дава {pred.get('home_win_pct', '—')}% / {pred.get('draw_pct', '—')}% / {pred.get('away_win_pct', '—')}% за 1/X/2.
+
+## ПРОГНОЗА
+Победител (модел): {winner}
+Вероятен резултат: {pred.get('likely_score', '—')}
+Алтернатива: {pred.get('alt_score', '—')}
+Над 2.5 гола: {pred.get('over25_pct', '—')}% · И двата отбора: {pred.get('btts_pct', '—')}%"""
+
+    def _finalize_prematch_data(self, data: dict) -> dict:
+        data["analyzed_at"] = datetime.now(timezone.utc).isoformat()
+        data["fingerprint"] = self.compute_data_fingerprint(data)
+        if data.get("gpt_narrative"):
+            data["broadcast_guide_draft"] = ""
+            data["gpt_guide_pending"] = False
+        else:
+            data["broadcast_guide_draft"] = self._build_instant_broadcast_guide(data)
+            data["gpt_guide_pending"] = _gpt_available
+        return data
+
     # --------------------------------------------------
     # GPT EDITORIAL (Bulgarian)
     # --------------------------------------------------
@@ -1643,7 +1798,7 @@ H2H — последни срещи:
             resp = _gpt_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=2400,
+                max_tokens=1800,
                 temperature=0.72,
             )
             narrative = self._clean_gpt_placeholders(resp.choices[0].message.content.strip())
@@ -2197,8 +2352,8 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             top_scorers=top_scorers, coaches=coaches,
             referee=referee, injuries=injuries,
         )
-        self._finalize_prematch_data(data)
         self._apply_cached_narrative(fixture_id, data)
+        self._finalize_prematch_data(data)
 
         # No GPT here — that's Phase 2 (unless narrative restored from cache)
         result = {"available": True, "data": data, "meta": meta}
@@ -2238,6 +2393,8 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             return None
 
         data["gpt_narrative"] = narrative
+        data["broadcast_guide_draft"] = ""
+        data["gpt_guide_pending"] = False
         result["data"] = data
         self._cache[fixture_id] = {"ts": time.time(), "data": result}
         return result
@@ -2303,11 +2460,10 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             top_scorers=top_scorers, coaches=coaches,
             referee=referee, injuries=injuries,
         )
-        self._finalize_prematch_data(data)
-
         self._apply_cached_narrative(fixture_id, data)
         if _gpt_available and not data.get("gpt_narrative"):
             data["gpt_narrative"] = self._generate_gpt_editorial(fixture_id, data)
+        self._finalize_prematch_data(data)
 
         result = {"available": True, "data": data, "meta": meta}
         self._cache[fixture_id] = {"ts": time.time(), "data": result}
