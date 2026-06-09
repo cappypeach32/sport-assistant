@@ -149,6 +149,7 @@ class PreMatchEngine:
         self._gpt_ts:      dict = {}   # fixture_id → last GPT call ts
         self._raw_cache:   dict = {}   # general data cache
         self._gpt_narrative_cache: dict = {}  # fixture_id → {ts, text}
+        self._events_cache: dict = {}   # fixture_id → events list
 
     def _cache_ttl_for(self, result: dict) -> int:
         data = result.get("data", {}) if isinstance(result.get("data"), dict) else {}
@@ -506,50 +507,154 @@ class PreMatchEngine:
 
         return result
 
-    def _get_squad_players(self, team_id: int, limit: int = 8) -> list:
-        """Fallback key players from official squad when league topscorers are empty (e.g. pre-tournament WC)."""
-        raw = self._get("players/squads", {"team": team_id})
-        if not raw:
+    def _get_fixture_events_cached(self, fixture_id: int) -> list:
+        if fixture_id in self._events_cache:
+            return self._events_cache[fixture_id]
+        data = self._get("fixtures/events", {"fixture": fixture_id}) or []
+        self._events_cache[fixture_id] = data
+        return data
+
+    def _get_key_players_from_recent(
+        self,
+        team_id: int,
+        match_limit: int = 10,
+        player_limit: int = 4,
+    ) -> list:
+        """
+        Aggregate goals + assists from recent official matches (not squad order).
+        """
+        raw = self._get("fixtures", {"team": team_id, "last": 30, "status": "FT"}) or []
+        official = [f for f in raw if not self._is_friendly_fixture(f)][:match_limit]
+        if not official:
             return []
 
-        players = raw[0].get("players", []) if isinstance(raw[0], dict) else []
-        pos_order = {"Attacker": 0, "Midfielder": 1, "Defender": 2, "Goalkeeper": 3}
-        players = sorted(players, key=lambda p: pos_order.get(p.get("position", ""), 4))
+        tallies: dict[str, dict] = {}
 
-        picked: list = []
-        seen_pos: set = set()
-        for p in players:
-            pos = p.get("position") or ""
-            if pos == "Goalkeeper" and "Goalkeeper" in seen_pos:
+        for fixture in official:
+            fid = fixture.get("fixture", {}).get("id")
+            if not fid:
                 continue
-            name = p.get("name") or ""
-            if not name:
+            appeared: set[str] = set()
+            for ev in self._get_fixture_events_cached(fid):
+                ev_team = (ev.get("team") or {}).get("id")
+                if ev_team != team_id:
+                    continue
+
+                player_name = (ev.get("player") or {}).get("name", "") or ""
+                assist_name = (ev.get("assist") or {}).get("name", "") or ""
+                if player_name:
+                    appeared.add(player_name)
+                if assist_name:
+                    appeared.add(assist_name)
+
+                if ev.get("type") == "Goal" and ev.get("detail") != "Own Goal":
+                    if player_name:
+                        tallies.setdefault(player_name, {"goals": 0, "assists": 0, "apps": 0})
+                        tallies[player_name]["goals"] += 1
+                if assist_name:
+                    tallies.setdefault(assist_name, {"goals": 0, "assists": 0, "apps": 0})
+                    tallies[assist_name]["assists"] += 1
+
+            for name in appeared:
+                tallies.setdefault(name, {"goals": 0, "assists": 0, "apps": 0})
+                tallies[name]["apps"] += 1
+
+        if not tallies:
+            return []
+
+        ranked = sorted(
+            tallies.items(),
+            key=lambda x: (x[1]["goals"], x[1]["assists"], x[1]["apps"]),
+            reverse=True,
+        )
+
+        players: list[dict] = []
+        for name, st in ranked[: max(player_limit, 8)]:
+            if st["goals"] == 0 and st["assists"] == 0:
                 continue
-            picked.append({
-                "name":     name,
-                "goals":    0,
-                "assists":  0,
-                "apps":     0,
-                "position": pos,
-                "source":   "squad",
+            players.append({
+                "name":           name,
+                "goals":          st["goals"],
+                "assists":        st["assists"],
+                "apps":           st["apps"],
+                "source":         "recent_matches",
+                "window_matches": len(official),
             })
-            seen_pos.add(pos)
-            if len(picked) >= limit:
+            if len(players) >= player_limit:
                 break
 
-        return picked
+        return self._finalize_key_players(players)
+
+    @staticmethod
+    def _finalize_key_players(players: list[dict]) -> list[dict]:
+        if not players:
+            return []
+        max_g = max(p.get("goals") or 0 for p in players)
+        max_a = max(p.get("assists") or 0 for p in players)
+        for p in players:
+            p["label"] = PreMatchEngine._format_key_player_label(p, max_g, max_a)
+        return players
+
+    @staticmethod
+    def _format_key_player_label(player: dict, max_goals: int, max_assists: int) -> str:
+        g = player.get("goals") or 0
+        a = player.get("assists") or 0
+        src = player.get("source", "")
+        chunks: list[str] = []
+
+        if g > 0:
+            line = f"⚽ {g} гола"
+            if g == max_goals and max_goals > 0:
+                line += " — най-добър реализатор"
+            chunks.append(line)
+        if a > 0:
+            line = f"🎯 {a} асист."
+            if a == max_assists and max_assists > 0 and (not g or a >= g):
+                line += " — най-много създадени положения"
+            chunks.append(line)
+
+        if not chunks:
+            return player.get("position") or "—"
+
+        if src == "recent_matches":
+            w = player.get("window_matches") or 10
+            return f"{' + '.join(chunks)} (последните {w} официални мача)"
+        if src == "league_topscorers":
+            return f"{' + '.join(chunks)} (сезон в лигата)"
+
+        return " + ".join(chunks)
+
+    def _resolve_team_key_players(
+        self,
+        league_players: list,
+        team_id: int,
+        limit: int = 4,
+    ) -> list:
+        if league_players:
+            sorted_p = sorted(
+                league_players,
+                key=lambda x: (x.get("goals") or 0, x.get("assists") or 0),
+                reverse=True,
+            )
+            players = []
+            for p in sorted_p[:limit]:
+                players.append({
+                    "name":    p.get("name", ""),
+                    "goals":   p.get("goals") or 0,
+                    "assists": p.get("assists") or 0,
+                    "apps":    p.get("apps") or 0,
+                    "source":  "league_topscorers",
+                })
+            return self._finalize_key_players(players)
+
+        return self._get_key_players_from_recent(team_id, player_limit=limit)
 
     def _enrich_key_players(self, top_scorers: dict, home_id: int, away_id: int) -> dict:
-        """Fill missing top_scorers sides from squad lists."""
-        result = {
-            "home": list(top_scorers.get("home") or []),
-            "away": list(top_scorers.get("away") or []),
+        """League topscorers when available; else real stats from recent official matches."""
+        return {
+            "home": self._resolve_team_key_players(top_scorers.get("home") or [], home_id),
+            "away": self._resolve_team_key_players(top_scorers.get("away") or [], away_id),
         }
-        if not result["home"]:
-            result["home"] = self._get_squad_players(home_id, 6)
-        if not result["away"]:
-            result["away"] = self._get_squad_players(away_id, 6)
-        return result
 
     @staticmethod
     def _coach_display_name(entry: dict) -> str:
@@ -1112,18 +1217,17 @@ class PreMatchEngine:
 
         # Top scorers text
         def scorer_line(player):
+            label = player.get("label") or ""
+            if label:
+                return f"{player['name']} — {label}"
             g = player.get("goals", 0)
             a = player.get("assists", 0)
-            pos = player.get("position") or ""
-            if player.get("source") == "squad" or (not g and not a):
-                suffix = f"{pos}, официален състав" if pos else "официален състав"
-                return f"{player['name']} ({suffix})"
             parts = []
             if g:
                 parts.append(f"{g} гола")
             if a:
                 parts.append(f"{a} асист.")
-            return f"{player['name']} ({', '.join(parts)})"
+            return f"{player['name']} ({', '.join(parts) if parts else 'няма данни'})"
 
         home_scorers_text = "\n".join(f"  • {scorer_line(p)}" for p in data.get("top_scorers", {}).get("home", [])[:5])
         away_scorers_text = "\n".join(f"  • {scorer_line(p)}" for p in data.get("top_scorers", {}).get("away", [])[:5])
@@ -1811,10 +1915,10 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         self._cache[fixture_id] = {"ts": time.time(), "data": result}
 
         has_scorers = bool(top_scorers.get("home") or top_scorers.get("away"))
-        squad_src   = any(p.get("source") == "squad" for p in top_scorers.get("home", []) + top_scorers.get("away", []))
+        recent_src  = any(p.get("source") == "recent_matches" for p in top_scorers.get("home", []) + top_scorers.get("away", []))
         print(
             f"[PREMATCH] Fast done — {meta['home_name']} vs {meta['away_name']} | "
-            f"Players={has_scorers}{' (squad)' if squad_src else ''} | Coach={bool(coaches)}"
+            f"Players={has_scorers}{' (recent)' if recent_src else ''} | Coach={bool(coaches)}"
         )
         return result
 

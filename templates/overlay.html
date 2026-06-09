@@ -2908,23 +2908,23 @@ function renderPrematch(data) {
             </div>
         </div>` : ''}
 
-        <!-- Top scorers -->
+        <!-- Key players -->
         ${(pm.top_scorers?.home?.length || pm.top_scorers?.away?.length) ? `
         <div>
-            <div class="card-label" style="margin-bottom:8px"><span class="dot"></span> Ключови играчи${(pm.top_scorers.home || []).some(p => p.source === 'squad') ? ' (състав)' : ' (топ голмайстори)'}</div>
+            <div class="card-label" style="margin-bottom:8px"><span class="dot"></span> Ключови играчи${(pm.top_scorers.home || []).some(p => p.source === 'recent_matches') || (pm.top_scorers.away || []).some(p => p.source === 'recent_matches') ? ' (последни официални мачове)' : ' (сезон в лигата)'}</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                 <div>
-                    ${(pm.top_scorers.home || []).slice(0,4).map(p => `
-                    <div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">
-                        <span style="color:var(--text)">${p.name}</span>
-                        <span style="color:var(--green)">${p.goals ? p.goals+'⚽ ' : ''}${p.assists ? p.assists+'🎯 ' : ''}${p.position && !p.goals ? p.position : ''}</span>
+                    ${(pm.top_scorers.home || []).map(p => `
+                    <div style="padding:8px 0;border-bottom:1px solid var(--border)">
+                        <div style="font-size:13px;font-weight:700;color:var(--text)">${p.name}</div>
+                        <div style="font-size:11px;color:var(--green);margin-top:3px;line-height:1.45">${p.label || (p.goals ? '⚽ '+p.goals+' гола' : '') + (p.assists ? ' 🎯 '+p.assists+' асист.' : '')}</div>
                     </div>`).join('')}
                 </div>
                 <div>
-                    ${(pm.top_scorers.away || []).slice(0,4).map(p => `
-                    <div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">
-                        <span style="color:var(--text)">${p.name}</span>
-                        <span style="color:var(--blue)">${p.goals ? p.goals+'⚽ ' : ''}${p.assists ? p.assists+'🎯 ' : ''}${p.position && !p.goals ? p.position : ''}</span>
+                    ${(pm.top_scorers.away || []).map(p => `
+                    <div style="padding:8px 0;border-bottom:1px solid var(--border)">
+                        <div style="font-size:13px;font-weight:700;color:var(--text)">${p.name}</div>
+                        <div style="font-size:11px;color:var(--blue);margin-top:3px;line-height:1.45">${p.label || (p.goals ? '⚽ '+p.goals+' гола' : '') + (p.assists ? ' 🎯 '+p.assists+' асист.' : '')}</div>
                     </div>`).join('')}
                 </div>
             </div>
