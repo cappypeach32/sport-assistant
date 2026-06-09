@@ -703,6 +703,45 @@ body {
 .h2h-team  { color: var(--muted); flex: 1; }
 .h2h-team.right { text-align: right; }
 .h2h-date  { font-size: 17px; color: var(--muted); min-width: 70px; text-align: center; }
+.h2h-scorers { font-size: 13px; color: var(--green); margin-top: 6px; line-height: 1.45; }
+
+.day-agenda {
+    margin: 0 0 12px 0;
+    padding: 10px 12px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    border-left: 3px solid var(--green);
+}
+.day-agenda-title {
+    font-size: 12px; font-weight: 800; color: var(--green);
+    text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px;
+}
+.day-agenda-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0; border-bottom: 1px solid var(--border);
+    font-size: 13px; cursor: pointer;
+}
+.day-agenda-row:last-child { border-bottom: none; }
+.day-agenda-row.selected { background: rgba(0,255,153,0.06); border-radius: 6px; }
+.day-agenda-row.next-match { border-left: 2px solid var(--yellow,#eab308); padding-left: 8px; }
+.day-agenda-time { min-width: 42px; font-weight: 700; color: var(--text); }
+.day-agenda-group { font-size: 11px; color: var(--muted); min-width: 36px; }
+.day-agenda-teams { flex: 1; line-height: 1.3; }
+.day-agenda-next-btn {
+    margin-top: 8px; width: 100%; padding: 8px 10px;
+    background: rgba(234,179,8,0.12); border: 1px solid rgba(234,179,8,0.35);
+    border-radius: 8px; color: var(--yellow,#eab308);
+    font-size: 12px; font-weight: 700; cursor: pointer;
+}
+
+.prematch-stale-badge {
+    display: none; margin: 8px 0 0;
+    padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    background: rgba(234,179,8,0.12); border: 1px solid rgba(234,179,8,0.4);
+    color: var(--yellow,#eab308); font-size: 12px; font-weight: 700; text-align: center;
+}
+.prematch-stale-badge:hover { background: rgba(234,179,8,0.2); }
 
 .advantages-grid {
     display: grid;
@@ -1195,6 +1234,7 @@ body {
         </div>
 
         <div class="all-matches-label" id="all-matches-label" style="display:none">Всички мачове</div>
+        <div id="day-agenda" style="display:none"></div>
         <div class="match-list" id="matches"></div>
         <div class="sidebar-scroll-hint">↓ още мачове</div>
     </div>
@@ -1314,6 +1354,9 @@ body {
         <div class="accordion-toggle" id="prematch-toggle" onclick="togglePrematch()">
             <span style="font-size:13px;color:var(--muted)" id="prematch-toggle-text">Зареждане на анализа...</span>
             <span class="arrow" id="prematch-arrow">▼</span>
+        </div>
+        <div class="prematch-stale-badge" id="prematch-stale-badge" onclick="refreshPrematchData()">
+            🔄 Нови данни — натисни за презареждане
         </div>
 
         <div class="accordion-body" id="prematch-body" style="max-height:0">
@@ -1467,6 +1510,7 @@ function switchTab(tab) {
     buildLeagueFilter(source);
     filterMatches();
     if (tab === "upcoming") loadFeatured(todayStr());
+    renderDayAgenda();
 }
 
 let _featuredCollapsed = localStorage.getItem("featuredCollapsed") === "1";
@@ -1604,11 +1648,95 @@ function filterMatches() {
     });
 
     renderMatches(state.filtered);
+    renderDayAgenda();
     const allLabel = document.getElementById("all-matches-label");
     if (allLabel && state.featured?.length) {
         allLabel.style.display = "block";
         allLabel.textContent = `Всички мачове (${state.filtered.length})`;
     }
+}
+
+function extractGroup(competition) {
+    const m = (competition || "").match(/Group\s+([A-Z])/i);
+    return m ? `Гр.${m[1]}` : "";
+}
+
+function formatAgendaDateLabel(dateStr) {
+    const BG_DAYS = ["Нед","Пон","Вто","Сря","Чет","Пет","Съб"];
+    const d = new Date(dateStr + "T12:00:00");
+    const today = todayStr();
+    if (dateStr === today) return "Днес";
+    const tomorrow = (() => { const t = new Date(); t.setDate(t.getDate()+1); return t.toISOString().slice(0,10); })();
+    if (dateStr === tomorrow) return "Утре";
+    return `${BG_DAYS[d.getDay()]} ${d.getDate()}.${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+
+function renderDayAgenda() {
+    const el = document.getElementById("day-agenda");
+    if (!el || state.activeTab !== "upcoming") {
+        if (el) el.style.display = "none";
+        return;
+    }
+
+    const dateKey = state.selectedDate || todayStr();
+    const dayMatches = state.upcoming
+        .filter(m => (m.start_time || "").slice(0, 10) === dateKey)
+        .sort((a, b) => (a.start_time || "").localeCompare(b.start_time || ""));
+
+    if (dayMatches.length < 2) {
+        el.style.display = "none";
+        return;
+    }
+
+    const now = Date.now();
+    const nextIdx = dayMatches.findIndex(m => new Date(m.start_time).getTime() > now);
+
+    el.innerHTML = `
+        <div class="day-agenda">
+            <div class="day-agenda-title">📅 Програма · ${formatAgendaDateLabel(dateKey)} (${dayMatches.length} мача)</div>
+            ${dayMatches.map((m, i) => {
+                const id = getId(m);
+                const sel = state.selectedId === id ? " selected" : "";
+                const next = i === nextIdx ? " next-match" : "";
+                const grp = extractGroup(m.competition);
+                return `
+                <div class="day-agenda-row${sel}${next}" onclick="selectMatch('${escAttr(id)}')">
+                    <span class="day-agenda-time">${kickoffTime(m)}</span>
+                    ${grp ? `<span class="day-agenda-group">${grp}</span>` : ""}
+                    <span class="day-agenda-teams">${m.home} — ${m.away}</span>
+                </div>`;
+            }).join("")}
+            ${nextIdx >= 0 ? `
+            <button type="button" class="day-agenda-next-btn" id="day-agenda-next-btn"
+                onclick="selectMatch('${escAttr(getId(dayMatches[nextIdx]))}')">
+                ⏭ Следващ: ${dayMatches[nextIdx].home} — ${dayMatches[nextIdx].away} · след <span id="day-agenda-countdown">—</span>
+            </button>` : ""}
+        </div>`;
+
+    el.style.display = "block";
+    updateDayAgendaCountdown(dayMatches, nextIdx);
+}
+
+let _dayAgendaTimer = null;
+function updateDayAgendaCountdown(dayMatches, nextIdx) {
+    clearInterval(_dayAgendaTimer);
+    if (nextIdx < 0 || !dayMatches[nextIdx]) return;
+
+    const tick = () => {
+        const diff = new Date(dayMatches[nextIdx].start_time).getTime() - Date.now();
+        const el = document.getElementById("day-agenda-countdown");
+        if (!el) return;
+        if (diff <= 0) {
+            el.textContent = "започва";
+            clearInterval(_dayAgendaTimer);
+            return;
+        }
+        const h = Math.floor(diff / 3600000);
+        const min = Math.floor((diff % 3600000) / 60000);
+        el.textContent = h > 0 ? `${h}ч ${min}мин` : `${min} мин`;
+    };
+    tick();
+    _dayAgendaTimer = setInterval(tick, 60000);
 }
 
 function kickoffTime(m) {
@@ -1749,6 +1877,8 @@ function selectMatch(id) {
         setText("prematch-toggle-text", "Зареждане на анализа...");
         renderHeader(match, {});
     }
+
+    startPrematchPoll(id);
 
     if (sameMatch && cachedPrematch?.gpt_narrative) {
         return;
@@ -2454,6 +2584,7 @@ function renderRefereeCard(ref) {
     <div style="background:var(--surface2);border-radius:8px;padding:10px 14px;border-left:3px solid var(--yellow,#eab308)">
         <div class="card-label" style="margin-bottom:8px;color:var(--yellow,#eab308)"><span class="dot" style="background:var(--yellow,#eab308)"></span> Съдия</div>
         <div style="font-size:14px;font-weight:700;margin-bottom:6px">${ref.name}</div>
+        ${ref.cards_profile ? `<div style="font-size:12px;color:var(--muted);margin-bottom:8px;line-height:1.45">🟨 ${ref.cards_profile}</div>` : ''}
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:12px">
             ${ref.games_this_season ? `<div style="text-align:center"><div style="color:var(--muted)">Игри</div><div style="font-weight:700">${ref.games_this_season}</div></div>` : ''}
             ${ref.avg_yellow != null ? `<div style="text-align:center"><div style="color:var(--muted)">Ж.карт/игра</div><div style="font-weight:700;color:var(--yellow,#eab308)">${ref.avg_yellow}</div></div>` : ''}
@@ -2753,9 +2884,15 @@ function renderPrematch(data) {
     }
 
     // Skip full re-render if prematch data hasn't changed (prevents flicker)
-    const renderKey = `${home}|${away}|${pm.home_form}|${pm.away_form}|${pm.prediction?.home_win_pct}|${(pm.gpt_narrative||"").length}`;
+    const renderKey = `${home}|${away}|${pm.home_form}|${pm.away_form}|${pm.prediction?.home_win_pct}|${pm.fingerprint}|${(pm.gpt_narrative||"").length}|${pm.h2h_latest_scorers}`;
     if (_prematchRenderedKey === renderKey) return;
     _prematchRenderedKey = renderKey;
+
+    if (pm.fingerprint) {
+        _prematchFingerprint = pm.fingerprint;
+        const badge = document.getElementById("prematch-stale-badge");
+        if (badge) badge.style.display = "none";
+    }
 
     const hs  = pm.home_stats  || {};
     const as_ = pm.away_stats  || {};
@@ -2872,6 +3009,17 @@ function renderPrematch(data) {
             <div style="font-size:12px;color:var(--muted);margin-top:6px">
                 ${formatH2hSummary(pm, home, away)}
             </div>
+            ${pm.h2h_latest_scorers ? `
+            <div class="h2h-scorers">${pm.h2h_latest_scorers}</div>` : ''}
+        </div>` : ''}
+
+        ${pm.group_scenarios?.available && pm.group_scenarios.bullets?.length ? `
+        <div>
+            <div class="card-label" style="margin-bottom:8px"><span class="dot" style="background:var(--blue)"></span> Сценарий за групата</div>
+            <div class="key-factors-list">
+                ${pm.group_scenarios.bullets.map(b => `<div class="kf-item">${b}</div>`).join("")}
+            </div>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">Проекция при различен резултат (след този мач)</div>
         </div>` : ''}
 
         <!-- Advantages -->
@@ -3093,6 +3241,13 @@ function update(data) {
     state.overlayByFixture[id] = data;
     if (data.prematch?.available) {
         state.prematchByFixture[id] = data.prematch;
+        if (data.prematch.fingerprint) {
+            const badge = document.getElementById("prematch-stale-badge");
+            if (badge && data.prematch.fingerprint !== _prematchFingerprint && _prematchFingerprint) {
+                badge.style.display = "block";
+            }
+            _prematchFingerprint = data.prematch.fingerprint;
+        }
     }
 
     if (!state.selectedId || state.selectedId === id) {
@@ -3250,6 +3405,59 @@ function setText(id, val) {
 }
 
 window._refreshPreflight = () => renderPreflightChecklist(state.lastData);
+
+/* =========================================================
+   PREMATCH FRESHNESS — auto-check every 30 min
+   ========================================================= */
+let _prematchFingerprint = "";
+let _prematchPollTimer = null;
+
+function startPrematchPoll(fixtureId) {
+    clearInterval(_prematchPollTimer);
+    if (!fixtureId) return;
+    setTimeout(() => checkPrematchFreshness(fixtureId), 8000);
+    _prematchPollTimer = setInterval(() => checkPrematchFreshness(fixtureId), 30 * 60 * 1000);
+}
+
+async function checkPrematchFreshness(fixtureId) {
+    if (!fixtureId || state.selectedId !== String(fixtureId)) return;
+    try {
+        const qs = _prematchFingerprint ? `?fp=${encodeURIComponent(_prematchFingerprint)}` : "";
+        const res = await fetch(`/prematch-check/${fixtureId}${qs}`);
+        const data = await res.json();
+        if (data.stale) {
+            const badge = document.getElementById("prematch-stale-badge");
+            if (badge) badge.style.display = "block";
+        }
+    } catch (e) { console.warn("prematch-check failed", e); }
+}
+
+async function refreshPrematchData() {
+    const id = state.selectedId;
+    if (!id) return;
+    const badge = document.getElementById("prematch-stale-badge");
+    if (badge) {
+        badge.textContent = "⏳ Презареждане...";
+        badge.style.pointerEvents = "none";
+    }
+    delete state.prematchByFixture[id];
+    _prematchRenderedKey = "";
+    try {
+        const res = await fetch(`/refresh-prematch/${id}`, { method: "POST" });
+        const data = await res.json();
+        if (data.fingerprint) _prematchFingerprint = data.fingerprint;
+    } catch (e) {
+        console.error(e);
+    } finally {
+        if (badge) {
+            badge.textContent = "🔄 Нови данни — натисни за презареждане";
+            badge.style.pointerEvents = "";
+            badge.style.display = "none";
+        }
+    }
+}
+
+window.refreshPrematchData = refreshPrematchData;
 
 </script>
 <script src="/static/tablet.js"></script>

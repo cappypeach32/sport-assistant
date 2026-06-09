@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import asyncio
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -94,6 +95,8 @@ latest_commentary:   list  = []   # list of { minute, title, text }
 _last_ht_status:     str   = ""
 _last_ft_status:     str   = ""
 _last_goal_count:    int   = 0    # detect goals for forced commentary refresh
+_last_prematch_refresh: dict = {}  # fixture_id → last background refresh ts
+PREMATCH_REFRESH_INTERVAL = 1800   # 30 min — refresh prematch data for active match
 latest_health:       dict  = {
     "last_poll_at": None,
     "last_error":   "",
@@ -625,13 +628,17 @@ def build_overlay_response(
             "h2h_away_wins":   pm_data.get("h2h_away_wins", 0),
             "h2h_count":       pm_data.get("h2h_count", 0),
             "avg_h2h_goals":   pm_data.get("avg_h2h_goals", 0),
+            "h2h_latest_scorers": pm_data.get("h2h_latest_scorers", ""),
             "standings_reliable": pm_data.get("standings_reliable", False),
+            "group_scenarios": pm_data.get("group_scenarios", {}),
             "prediction":      pm_data.get("prediction", {}),
             "gpt_narrative":   pm_data.get("gpt_narrative", ""),
             "top_scorers":     pm_data.get("top_scorers", {"home": [], "away": []}),
             "coaches":         pm_data.get("coaches", {}),
             "referee":         pm_data.get("referee", {}),
             "injuries":        pm_data.get("injuries", {"home": [], "away": []}),
+            "fingerprint":     pm_data.get("fingerprint", ""),
+            "analyzed_at":     pm_data.get("analyzed_at", ""),
         },
 
         "table_impact":      table_impact,
@@ -710,9 +717,28 @@ async def live_stats_loop():
             if match_phase == "finished" and latest_postmatch:
                 continue
 
-            # For prematch, only broadcast once every 60s (no live data changes)
-            if match_phase == "prematch" and latest_prematch.get("available"):
-                await asyncio.sleep(40)  # extra delay on top of POLL_INTERVAL
+            # For prematch — periodic refresh so standings/injuries/referee stay current
+            if match_phase == "prematch":
+                now_ts = time.time()
+                last_pm = _last_prematch_refresh.get(fixture_id, 0)
+                if now_ts - last_pm >= PREMATCH_REFRESH_INTERVAL:
+                    _last_prematch_refresh[fixture_id] = now_ts
+                    prematch_engine._cache.pop(fixture_id, None)
+                    pm_result = await loop_ref.run_in_executor(
+                        None, prematch_engine.analyze_fast, fixture_id, active_match,
+                    )
+                    if pm_result.get("available"):
+                        old_fp = prematch_engine.compute_data_fingerprint(
+                            latest_prematch.get("data", {}) if latest_prematch.get("available") else {}
+                        )
+                        latest_prematch = pm_result
+                        new_fp = prematch_engine.compute_data_fingerprint(
+                            pm_result.get("data", {})
+                        )
+                        if old_fp != new_fp:
+                            print(f"[PREMATCH] Background refresh — data changed ({old_fp} → {new_fp})")
+                elif latest_prematch.get("available"):
+                    await asyncio.sleep(40)  # extra delay when prematch stable
 
             minute = int(live_fixture.get("minute") or 0) if live_fixture else 0
             print(
@@ -1034,6 +1060,74 @@ def upcoming_matches(days: int = 7, refresh: bool = False):
     _upcoming_cache["data"] = result
     print(f"[UPCOMING] Fetched {len(all_upcoming)} upcoming matches over {days} days")
     return result
+
+
+@app.get("/prematch-check/{fixture_id}")
+def prematch_check(fixture_id: int, fp: str = ""):
+    """Compare client fingerprint with server; refresh server cache if older than 30 min."""
+    cached = prematch_engine.get_cached_prematch(fixture_id)
+    cached_data = cached.get("data", {}) if cached.get("available") else {}
+    server_fp = prematch_engine.compute_data_fingerprint(cached_data)
+    analyzed_at = cached_data.get("analyzed_at", "")
+
+    cache_entry = prematch_engine._cache.get(fixture_id, {})
+    cache_age = time.time() - cache_entry.get("ts", 0) if cache_entry else 9999
+
+    stale = bool(fp and server_fp and fp != server_fp)
+
+    if cache_age >= PREMATCH_REFRESH_INTERVAL:
+        prematch_engine._cache.pop(fixture_id, None)
+        fresh = prematch_engine.analyze_fast(fixture_id, {"raw_id": fixture_id})
+        fresh_data = fresh.get("data", {}) if fresh.get("available") else {}
+        new_fp = prematch_engine.compute_data_fingerprint(fresh_data)
+        if fp and new_fp and new_fp != fp:
+            stale = True
+        if new_fp:
+            server_fp = new_fp
+        analyzed_at = fresh_data.get("analyzed_at", analyzed_at)
+
+    return {
+        "fixture_id":  fixture_id,
+        "fingerprint": server_fp,
+        "stale":       stale,
+        "analyzed_at": analyzed_at,
+    }
+
+
+@app.post("/refresh-prematch/{fixture_id}")
+async def refresh_prematch(fixture_id: int):
+    """Force fresh prematch analysis and push to connected clients."""
+    global latest_prematch
+
+    prematch_engine._cache.pop(fixture_id, None)
+    _last_prematch_refresh[fixture_id] = time.time()
+
+    match = active_match if active_match and active_match.get("raw_id") == fixture_id else {"raw_id": fixture_id}
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, prematch_engine.analyze_fast, fixture_id, match)
+
+    if active_match and active_match.get("raw_id") == fixture_id and result.get("available"):
+        latest_prematch = result
+        payload = build_overlay_response(
+            active_match,
+            intelligence=latest_intelligence or {},
+            prematch=latest_prematch,
+            live_narrative=latest_narrative,
+            halftime_analysis=latest_halftime,
+            postmatch_summary=latest_postmatch,
+        )
+        payload["commentary_queue"] = latest_commentary
+        await broadcast(payload)
+
+        if not result.get("data", {}).get("gpt_narrative"):
+            asyncio.create_task(_load_prematch_async(fixture_id, active_match))
+
+    data = result.get("data", {}) if result.get("available") else {}
+    return {
+        "ok":          True,
+        "fingerprint": data.get("fingerprint", ""),
+        "analyzed_at": data.get("analyzed_at", ""),
+    }
 
 
 # =====================================================

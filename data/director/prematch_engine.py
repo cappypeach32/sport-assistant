@@ -1,8 +1,10 @@
 import os
 import re
+import hashlib
+import json
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -236,6 +238,7 @@ class PreMatchEngine:
         results = []
         for f in raw:
             results.append({
+                "fixture_id": f["fixture"]["id"],
                 "date":       f["fixture"]["date"][:10],
                 "home":       f["teams"]["home"]["name"],
                 "away":       f["teams"]["away"]["name"],
@@ -244,6 +247,30 @@ class PreMatchEngine:
                 "competition": f["league"]["name"],
             })
         return results
+
+    def _h2h_goal_scorers_line(self, fixture_id: int, season: int | None = None) -> str:
+        """Format goal scorers from a finished H2H fixture, e.g. 'Raúl Jiménez (23'), O. Appollis (67')'."""
+        goals: list[dict] = []
+        for ev in self._get_fixture_events_cached(fixture_id):
+            if ev.get("type") != "Goal" or ev.get("detail") == "Own Goal":
+                continue
+            t = ev.get("time") or {}
+            minute = t.get("elapsed")
+            if minute is None:
+                minute = t.get("extra") or 0
+            player = ev.get("player") or {}
+            pid    = player.get("id")
+            pname  = player.get("name", "") or "?"
+            names  = {pname}
+            display = self._resolve_key_player_display_name(pid, names, season, pname)
+            goals.append({"minute": int(minute or 0), "player": display})
+
+        if not goals:
+            return ""
+
+        goals.sort(key=lambda g: g["minute"])
+        parts = [f"{g['player']} ({g['minute']}')" for g in goals]
+        return "Голове: " + ", ".join(parts)
 
     @staticmethod
     def _is_friendly_fixture(fixture: dict) -> bool:
@@ -939,6 +966,13 @@ class PreMatchEngine:
         elif avg_yellow >= 2:   strictness = "среден"
         else:                   strictness = "либерален"
 
+        cards_profile = ""
+        if games_evented > 0:
+            cards_profile = (
+                f"Средно {avg_yellow} жълти · {avg_red} червени на мач "
+                f"(последните {games_evented} мача)"
+            )
+
         return {
             "name":               ref_name,
             "games_this_season":  total_games,
@@ -948,6 +982,8 @@ class PreMatchEngine:
             "avg_red":            avg_red,
             "avg_penalties":      avg_pen,
             "strictness":         strictness,
+            "cards_sample_games": games_evented,
+            "cards_profile":      cards_profile,
         }
 
     def _get_injuries(self, fixture_id: int, home_id: int, away_id: int) -> dict:
@@ -1060,6 +1096,89 @@ class PreMatchEngine:
             },
         }
 
+    @staticmethod
+    def calculate_group_scenarios(
+        full_table: list,
+        home_id:    int,
+        away_id:    int,
+        home_name:  str = "",
+        away_name:  str = "",
+    ) -> dict:
+        """
+        Prematch group-stage scenarios: projected table positions for win / draw / loss.
+        Only meaningful when standings already have played matches.
+        """
+        if not full_table:
+            return {}
+
+        bullets: list[str] = []
+        for label, hg, ag in (
+            (f"Победа на {home_name}", 1, 0),
+            ("Равен", 1, 1),
+            (f"Победа на {away_name}", 0, 1),
+        ):
+            impact = PreMatchEngine.calculate_table_impact(
+                full_table, home_id, away_id, hg, ag, home_name, away_name,
+            )
+            if not impact:
+                continue
+            h = impact["home"]
+            a = impact["away"]
+            if hg > ag:
+                extra = f" — {h['pos_label']}" if h.get("pos_label") else ""
+                bullets.append(
+                    f"{label} → {home_name} на {h['new_pos']}. място ({h['pts_after']} т.){extra}"
+                )
+            elif ag > hg:
+                extra = f" — {a['pos_label']}" if a.get("pos_label") else ""
+                bullets.append(
+                    f"{label} → {away_name} на {a['new_pos']}. място ({a['pts_after']} т.){extra}"
+                )
+            else:
+                h_extra = f", {h['pos_label']}" if h.get("pos_label") else ""
+                a_extra = f", {a['pos_label']}" if a.get("pos_label") else ""
+                bullets.append(
+                    f"{label} → {home_name} {h['new_pos']}. място ({h['pts_after']} т.{h_extra}); "
+                    f"{away_name} {a['new_pos']}. място ({a['pts_after']} т.{a_extra})"
+                )
+
+        if not bullets:
+            return {}
+        return {"available": True, "bullets": bullets}
+
+    def _finalize_prematch_data(self, data: dict) -> dict:
+        data["analyzed_at"] = datetime.now(timezone.utc).isoformat()
+        data["fingerprint"] = self.compute_data_fingerprint(data)
+        return data
+
+    @staticmethod
+    def compute_data_fingerprint(data: dict) -> str:
+        """Stable hash of key prematch fields — used to detect stale client cache."""
+        if not data:
+            return ""
+        pred = data.get("prediction") or {}
+        latest_h2h = (data.get("h2h_raw") or [{}])[0] if data.get("h2h_raw") else {}
+        key = {
+            "home_win":   pred.get("home_win_pct"),
+            "draw":       pred.get("draw_pct"),
+            "away_win":   pred.get("away_win_pct"),
+            "h2h_count":  data.get("h2h_count"),
+            "h2h_latest": {
+                "date":  latest_h2h.get("date"),
+                "score": f"{latest_h2h.get('home_goals')}:{latest_h2h.get('away_goals')}",
+            },
+            "home_pos":   (data.get("home_standing") or {}).get("position"),
+            "home_pts":   (data.get("home_standing") or {}).get("points"),
+            "away_pos":   (data.get("away_standing") or {}).get("position"),
+            "away_pts":   (data.get("away_standing") or {}).get("points"),
+            "referee":    (data.get("referee") or {}).get("name"),
+            "injuries_h": len((data.get("injuries") or {}).get("home") or []),
+            "injuries_a": len((data.get("injuries") or {}).get("away") or []),
+            "scorers_h":  [p.get("name") for p in (data.get("top_scorers") or {}).get("home") or []],
+        }
+        raw = json.dumps(key, sort_keys=True, default=str)
+        return hashlib.md5(raw.encode()).hexdigest()[:12]
+
     # --------------------------------------------------
     # RULE-BASED ANALYSIS (no GPT needed)
     # --------------------------------------------------
@@ -1121,6 +1240,14 @@ class PreMatchEngine:
         h2h_count   = len(h2h[:5])
         avg_h2h_goals = round(total_h2h_goals / max(h2h_count, 1), 1)
 
+        home_id = meta.get("home_id")
+        away_id = meta.get("away_id")
+        season  = meta.get("season")
+
+        h2h_latest_scorers = ""
+        if h2h and h2h[0].get("fixture_id"):
+            h2h_latest_scorers = self._h2h_goal_scorers_line(h2h[0]["fixture_id"], season)
+
         # Standings
         h_stand = standings.get("home", {})
         a_stand = standings.get("away", {})
@@ -1130,6 +1257,12 @@ class PreMatchEngine:
             return bool(st.get("position")) and (st.get("played") or 0) > 0
 
         standings_reliable = _standings_meaningful(h_stand) or _standings_meaningful(a_stand)
+
+        group_scenarios: dict = {}
+        if standings_reliable and standings.get("full_table") and home_id and away_id:
+            group_scenarios = self.calculate_group_scenarios(
+                standings["full_table"], home_id, away_id, home, away,
+            )
 
         # Key advantages
         home_advantages = []
@@ -1252,9 +1385,11 @@ class PreMatchEngine:
             "h2h_away_wins":  away_h2h_wins,
             "h2h_count":      h2h_count,
             "avg_h2h_goals":  avg_h2h_goals,
+            "h2h_latest_scorers": h2h_latest_scorers,
             "home_standing":  h_stand,
             "away_standing":  a_stand,
             "standings_reliable": standings_reliable,
+            "group_scenarios": group_scenarios,
             "home_advantages": home_advantages,
             "away_advantages": away_advantages,
             "key_factors":    key_factors,
@@ -2052,6 +2187,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             top_scorers=top_scorers, coaches=coaches,
             referee=referee, injuries=injuries,
         )
+        self._finalize_prematch_data(data)
         self._apply_cached_narrative(fixture_id, data)
 
         # No GPT here — that's Phase 2 (unless narrative restored from cache)
@@ -2157,6 +2293,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             top_scorers=top_scorers, coaches=coaches,
             referee=referee, injuries=injuries,
         )
+        self._finalize_prematch_data(data)
 
         self._apply_cached_narrative(fixture_id, data)
         if _gpt_available and not data.get("gpt_narrative"):
