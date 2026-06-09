@@ -367,6 +367,51 @@ class PreMatchEngine:
 
         return result
 
+    def _get_squad_players(self, team_id: int, limit: int = 8) -> list:
+        """Fallback key players from official squad when league topscorers are empty (e.g. pre-tournament WC)."""
+        raw = self._get("players/squads", {"team": team_id})
+        if not raw:
+            return []
+
+        players = raw[0].get("players", []) if isinstance(raw[0], dict) else []
+        pos_order = {"Attacker": 0, "Midfielder": 1, "Defender": 2, "Goalkeeper": 3}
+        players = sorted(players, key=lambda p: pos_order.get(p.get("position", ""), 4))
+
+        picked: list = []
+        seen_pos: set = set()
+        for p in players:
+            pos = p.get("position") or ""
+            if pos == "Goalkeeper" and "Goalkeeper" in seen_pos:
+                continue
+            name = p.get("name") or ""
+            if not name:
+                continue
+            picked.append({
+                "name":     name,
+                "goals":    0,
+                "assists":  0,
+                "apps":     0,
+                "position": pos,
+                "source":   "squad",
+            })
+            seen_pos.add(pos)
+            if len(picked) >= limit:
+                break
+
+        return picked
+
+    def _enrich_key_players(self, top_scorers: dict, home_id: int, away_id: int) -> dict:
+        """Fill missing top_scorers sides from squad lists."""
+        result = {
+            "home": list(top_scorers.get("home") or []),
+            "away": list(top_scorers.get("away") or []),
+        }
+        if not result["home"]:
+            result["home"] = self._get_squad_players(home_id, 6)
+        if not result["away"]:
+            result["away"] = self._get_squad_players(away_id, 6)
+        return result
+
     def _get_coaches(self, home_id: int, away_id: int) -> dict:
         """Fetch coach names for both teams."""
         result = {}
@@ -828,6 +873,22 @@ class PreMatchEngine:
     # GPT EDITORIAL (Bulgarian)
     # --------------------------------------------------
 
+    @staticmethod
+    def _clean_gpt_placeholders(text: str) -> str:
+        """Remove lines where GPT echoed prompt template brackets."""
+        if not text:
+            return ""
+        placeholder_markers = (
+            "[Играч]", "[позиция/роля]", "[статистика]", "[защо да го следим]",
+            "[Тема]", "[факт с конкретни числа]", "[конкретна слабост]",
+        )
+        cleaned: list[str] = []
+        for line in text.splitlines():
+            if any(m in line for m in placeholder_markers):
+                continue
+            cleaned.append(line)
+        return "\n".join(cleaned).strip()
+
     def _has_real_data(self, data: dict) -> bool:
         """Returns True only when we have verified API data to base analysis on."""
         hs  = data.get("home_stats", {})
@@ -882,10 +943,16 @@ class PreMatchEngine:
         def scorer_line(player):
             g = player.get("goals", 0)
             a = player.get("assists", 0)
+            pos = player.get("position") or ""
+            if player.get("source") == "squad" or (not g and not a):
+                suffix = f"{pos}, официален състав" if pos else "официален състав"
+                return f"{player['name']} ({suffix})"
             parts = []
-            if g: parts.append(f"{g} гола")
-            if a: parts.append(f"{a} асист.")
-            return f"{player['name']} ({', '.join(parts)})" if parts else player['name']
+            if g:
+                parts.append(f"{g} гола")
+            if a:
+                parts.append(f"{a} асист.")
+            return f"{player['name']} ({', '.join(parts)})"
 
         home_scorers_text = "\n".join(f"  • {scorer_line(p)}" for p in data.get("top_scorers", {}).get("home", [])[:5])
         away_scorers_text = "\n".join(f"  • {scorer_line(p)}" for p in data.get("top_scorers", {}).get("away", [])[:5])
@@ -970,13 +1037,10 @@ H2H — последни срещи:
 (2-3 параграфа — последни резултати с конкретни числа, тенденция нагоре/надолу, силна/слаба страна)
 
 ## КЛЮЧОВИ ИГРАЧИ ЗА НАБЛЮДЕНИЕ
-(Само играчи дадени в данните. За всеки: роля в отбора, конкретна статистика, защо е опасен днес)
+(САМО играчи изрично изброени в секцията „КЛЮЧОВИ ИГРАЧИ“ по-горе. По 2–3 bullet-а на отбор: Име — позиция — статистика/роля — защо да го следим днес.)
+(Ако в данните няма играчи — напиши един ред: „Ключови играчи: данните не са налични.“ НЕ копирай шаблони или placeholder текст.)
 ### {home}
-• [Играч]: [позиция/роля] — [статистика] — [защо да го следим]
-• [Играч]: [позиция/роля] — [статистика] — [защо да го следим]
 ### {away}
-• [Играч]: [позиция/роля] — [статистика] — [защо да го следим]
-• [Играч]: [позиция/роля] — [статистика] — [защо да го следим]
 
 ## ТАКТИЧЕСКИ РАЗБОР
 ### Как ще играе {home}?
@@ -990,20 +1054,15 @@ H2H — последни срещи:
 • {away}: [конкретна слабост]
 
 ## ГОВОРНИ ТОЧКИ ЗА СТРИЙМА
-(5 теми — конкретни, базирани на данните, с контекст за 1-2 минути дискусия)
-1. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
-2. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
-3. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
-4. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
-5. **[Тема]**: [2-3 изречения с контекст, числа и мнение]
+(5 теми — конкретни, базирани на данните, с контекст за 1-2 минути дискусия. Реални заглавия и текст, без квадратни скоби.)
+1. **Заглавие**: 2-3 изречения с контекст, числа и мнение
+2. **Заглавие**: 2-3 изречения
+3. **Заглавие**: 2-3 изречения
+4. **Заглавие**: 2-3 изречения
+5. **Заглавие**: 2-3 изречения
 
 ## ИСТОРИЧЕСКИ ФАКТИ
-(5 конкретни факта от H2H и статистиката — само реални данни от по-горе)
-• [факт с конкретни числа]
-• [факт с конкретни числа]
-• [факт с конкретни числа]
-• [факт с конкретни числа]
-• [факт с конкретни числа]
+(До 5 конкретни факта от H2H и статистиката — само реални данни. Ако липсват — по-малко факта, без измисляне.)
 
 ## ОЧАКВАНЕ ЗА МАЧА
 (2 параграфа — очакван темп, стил на игра, кога да се очакват голове, дали очакваш отворен/затворен мач, какви моменти може да са ключови)
@@ -1023,7 +1082,7 @@ H2H — последни срещи:
                 max_tokens=2400,
                 temperature=0.72,
             )
-            narrative = resp.choices[0].message.content.strip()
+            narrative = self._clean_gpt_placeholders(resp.choices[0].message.content.strip())
             self._gpt_ts[fixture_id] = now
             self._store_narrative_cache(fixture_id, narrative)
             print(f"[PREMATCH] GPT editorial generated for fixture {fixture_id}")
@@ -1562,7 +1621,9 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         home_stats  = results.get("home_stats", {})
         away_stats  = results.get("away_stats", {})
         standings   = results.get("standings", {})
-        top_scorers = results.get("top_scorers", {})
+        top_scorers = self._enrich_key_players(
+            results.get("top_scorers", {}), home_id, away_id,
+        )
         coaches     = results.get("coaches", {})
         referee     = results.get("referee", {})
         injuries    = results.get("injuries", {})
@@ -1579,7 +1640,11 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         self._cache[fixture_id] = {"ts": time.time(), "data": result}
 
         has_scorers = bool(top_scorers.get("home") or top_scorers.get("away"))
-        print(f"[PREMATCH] Fast done — {meta['home_name']} vs {meta['away_name']} | Scorers={has_scorers} | Coach={bool(coaches)}")
+        squad_src   = any(p.get("source") == "squad" for p in top_scorers.get("home", []) + top_scorers.get("away", []))
+        print(
+            f"[PREMATCH] Fast done — {meta['home_name']} vs {meta['away_name']} | "
+            f"Players={has_scorers}{' (squad)' if squad_src else ''} | Coach={bool(coaches)}"
+        )
         return result
 
     def generate_gpt_phase(self, fixture_id: int) -> dict | None:
@@ -1661,7 +1726,9 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         home_stats  = results.get("home_stats", {})
         away_stats  = results.get("away_stats", {})
         standings   = results.get("standings", {})
-        top_scorers = results.get("top_scorers", {})
+        top_scorers = self._enrich_key_players(
+            results.get("top_scorers", {}), home_id, away_id,
+        )
         coaches     = results.get("coaches", {})
         referee     = results.get("referee", {})
         injuries    = results.get("injuries", {})
@@ -1680,5 +1747,5 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         self._cache[fixture_id] = {"ts": time.time(), "data": result}
 
         has_scorers = bool(top_scorers.get("home") or top_scorers.get("away"))
-        print(f"[PREMATCH] Done — {meta['home_name']} vs {meta['away_name']} | GPT={'yes' if _gpt_available else 'no'} | Scorers={has_scorers} | Coach={bool(coaches)}")
+        print(f"[PREMATCH] Done — {meta['home_name']} vs {meta['away_name']} | GPT={'yes' if _gpt_available else 'no'} | Players={has_scorers} | Coach={bool(coaches)}")
         return result
