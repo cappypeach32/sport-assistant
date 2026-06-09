@@ -2771,6 +2771,22 @@ function renderPrematch(data) {
         ).join("");
     }
 
+    function formBlock(stats, formStr) {
+        if (!formStr || formStr === "—" || !formStr.length) return "";
+        const played = stats?.played || formStr.length;
+        const w = stats?.wins ?? 0;
+        const d = stats?.draws ?? 0;
+        const l = stats?.losses ?? 0;
+        return `
+        <div class="pt-form-wrap" style="margin-top:10px">
+            <div style="font-size:11px;color:var(--muted);line-height:1.4">
+                <div>Последни ${played} мача</div>
+                <div style="font-weight:800;color:var(--text);margin:3px 0 6px">${w}П ${d}Р ${l}З</div>
+            </div>
+            <div class="pt-form">${formDots(formStr)}</div>
+        </div>`;
+    }
+
     function standingBadge(st) {
         if (!st || !st.position || !(st.played > 0)) return "";
         return `<div class="standing-badge">📊 ${st.position}. място · ${st.points} т. · ${st.played} мача</div>`;
@@ -2811,7 +2827,7 @@ function renderPrematch(data) {
                 <div style="font-size:12px;color:var(--muted);margin-top:8px">
                     📡 Статистиката за този отбор не е налична в момента
                 </div>
-                ${hasForm ? `<div class="pt-form" style="margin-top:8px">${formDots(formStr)}</div>` : ''}
+                ${formBlock(stats, formStr)}
             </div>`;
         }
 
@@ -2819,13 +2835,12 @@ function renderPrematch(data) {
         <div class="prematch-team-block">
             <div class="pt-name">${name}</div>
             ${hasStats ? `
-            <div class="pt-stat">Игри: <span>${stats.played}</span> &nbsp; П:<span>${stats.wins}</span> Р:<span>${stats.draws}</span> З:<span>${stats.losses}</span></div>
             <div class="pt-stat">Голове: <span>${stats.scored}</span> вкарани / <span>${stats.conceded}</span> допуснати</div>
             ${stats.avg_score != null ? `<div class="pt-stat">Средно: <span>${Number(stats.avg_score).toFixed(2)}</span> гола/мач</div>` : ''}
             ${stats.source_label ? `<div class="pt-stat" style="font-size:11px;color:var(--muted);line-height:1.4">📊 ${stats.source_label}</div>` : ''}
             ` : ''}
             ${standingBadge(standing)}
-            ${hasForm ? `<div class="pt-form" style="margin-top:8px">${formDots(formStr)}</div>` : ''}
+            ${formBlock(stats, formStr)}
         </div>`;
     }
 
@@ -2880,11 +2895,17 @@ function renderPrematch(data) {
             </div>
         </div>` : ''}
 
-        <!-- Coaches row -->
+        <!-- Coaches -->
         ${(pm.coaches?.home || pm.coaches?.away) ? `
-        <div style="display:flex;gap:10px;margin-bottom:4px">
-            <div style="flex:1;font-size:12px;color:var(--muted)">🎽 Треньор: <span style="color:var(--text)">${pm.coaches?.home || '—'}</span></div>
-            <div style="flex:1;font-size:12px;color:var(--muted);text-align:right">Треньор: <span style="color:var(--text)">${pm.coaches?.away || '—'}</span> 🎽</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px">
+            <div>
+                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">🎽 Треньор</div>
+                <div style="font-size:14px;font-weight:700;color:var(--text);margin-top:4px;line-height:1.35">${pm.coaches?.home || '—'}</div>
+            </div>
+            <div style="text-align:right">
+                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">Треньор 🎽</div>
+                <div style="font-size:14px;font-weight:700;color:var(--text);margin-top:4px;line-height:1.35">${pm.coaches?.away || '—'}</div>
+            </div>
         </div>` : ''}
 
         <!-- Top scorers -->

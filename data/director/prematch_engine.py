@@ -243,63 +243,89 @@ class PreMatchEngine:
             })
         return results
 
+    @staticmethod
+    def _is_friendly_fixture(fixture: dict) -> bool:
+        league = fixture.get("league") or {}
+        name = (league.get("name") or "").lower()
+        typ  = (league.get("type") or "").lower()
+        return typ == "friendly" or "friend" in name
+
+    def _aggregate_fixtures(self, fixtures: list, team_id: int) -> dict:
+        wins = draws = losses = scored = conceded = 0
+        form: list[str] = []
+        comp_names: list[str] = []
+
+        for f in fixtures:
+            home_id    = f["teams"]["home"]["id"]
+            home_goals = f["goals"].get("home") or 0
+            away_goals = f["goals"].get("away") or 0
+            comp_name  = (f.get("league") or {}).get("name", "") or ""
+            if comp_name and comp_name not in comp_names:
+                comp_names.append(comp_name)
+
+            if home_id == team_id:
+                s_goals, c_goals = home_goals, away_goals
+            else:
+                s_goals, c_goals = away_goals, home_goals
+
+            scored   += s_goals
+            conceded += c_goals
+
+            if s_goals > c_goals:
+                wins += 1
+                form.append("W")
+            elif s_goals == c_goals:
+                draws += 1
+                form.append("D")
+            else:
+                losses += 1
+                form.append("L")
+
+        played    = wins + draws + losses
+        avg_score = round(scored / played, 2) if played else None
+        avg_conc  = round(conceded / played, 2) if played else None
+
+        return {
+            "played":         played,
+            "wins":           wins,
+            "draws":          draws,
+            "losses":         losses,
+            "scored":         scored,
+            "conceded":       conceded,
+            "avg_score":      avg_score,
+            "avg_conc":       avg_conc,
+            "form":           form,
+            "form_str":       "".join(form) if form else "—",
+            "clean_sheets":   0,
+            "failed_to_score": 0,
+            "competitions":   comp_names,
+        }
+
     def _get_team_stats(self, team_id: int, league_id: int, season: int) -> dict:
         """
-        Get team form from last 5 finished matches (ANY competition).
-        This works regardless of league coverage in API-Football.
-        Falls back to league statistics only if recent fixtures are empty.
+        Form from recent finished matches — official competitions first, friendlies as fill.
+        Falls back to league season stats for domestic leagues.
         """
-        # Primary: last 10 finished matches from any competition
-        raw = self._get("fixtures", {"team": team_id, "last": 10, "status": "FT"})
+        raw = self._get("fixtures", {"team": team_id, "last": 30, "status": "FT"})
 
         if raw:
-            wins = draws = losses = scored = conceded = 0
-            form = []
-            comp_names: list[str] = []
+            official = [f for f in raw if not self._is_friendly_fixture(f)]
+            friendly = [f for f in raw if self._is_friendly_fixture(f)]
 
-            for f in raw:
-                home_id    = f["teams"]["home"]["id"]
-                home_goals = f["goals"].get("home") or 0
-                away_goals = f["goals"].get("away") or 0
-                comp_name  = (f.get("league") or {}).get("name", "") or ""
-                if comp_name and comp_name not in comp_names:
-                    comp_names.append(comp_name)
+            if len(official) >= 3:
+                pool = official[:10]
+                pool_mix = {"official": len(pool), "friendly": 0}
+            else:
+                pool = (official + friendly)[:10]
+                pool_mix = {
+                    "official": sum(1 for f in pool if not self._is_friendly_fixture(f)),
+                    "friendly": sum(1 for f in pool if self._is_friendly_fixture(f)),
+                }
 
-                if home_id == team_id:
-                    s_goals, c_goals = home_goals, away_goals
-                else:
-                    s_goals, c_goals = away_goals, home_goals
-
-                scored   += s_goals
-                conceded += c_goals
-
-                if s_goals > c_goals:
-                    wins += 1;  form.append("W")
-                elif s_goals == c_goals:
-                    draws += 1; form.append("D")
-                else:
-                    losses += 1; form.append("L")
-
-            played    = wins + draws + losses
-            avg_score = round(scored   / played, 2) if played else None
-            avg_conc  = round(conceded / played, 2) if played else None
-
-            return {
-                "played":    played,
-                "wins":      wins,
-                "draws":     draws,
-                "losses":    losses,
-                "scored":    scored,
-                "conceded":  conceded,
-                "avg_score": avg_score,
-                "avg_conc":  avg_conc,
-                "form":      form,
-                "form_str":  "".join(form) if form else "—",
-                "clean_sheets":      sum(1 for f in form if f == "W"),
-                "failed_to_score":   0,
-                "source":            "recent_fixtures",
-                "competitions":      comp_names,
-            }
+            stats = self._aggregate_fixtures(pool, team_id)
+            stats["source"]    = "recent_fixtures"
+            stats["pool_mix"]  = pool_mix
+            return stats
 
         # Fallback: league statistics (works for domestic leagues)
         raw_stats = self._get("teams/statistics", {
@@ -354,21 +380,76 @@ class PreMatchEngine:
 
         played = stats.get("played") or 0
         comps  = stats.get("competitions") or []
+        mix    = stats.get("pool_mix") or {}
+        off    = mix.get("official", 0)
+        fr     = mix.get("friendly", 0)
+
         if not played:
             return "няма скорошна форма"
 
-        if not comps:
-            return f"последните {played} приключили мача (всички турнири)"
+        comp_summary = ""
+        if comps:
+            labels = [self._friendly_comp_label(c) for c in comps[:3]]
+            if len(comps) > 3:
+                comp_summary = f" ({', '.join(labels)} + още {len(comps) - 3})"
+            elif len(labels) == 1:
+                comp_summary = f" ({labels[0]})"
+            else:
+                comp_summary = f" ({', '.join(labels)})"
 
-        labels = [self._friendly_comp_label(c) for c in comps[:4]]
-        if len(comps) == 1:
-            return f"последните {played} мача ({labels[0]})"
+        if off and not fr:
+            word = "мач" if off == 1 else "мача"
+            return f"последните {off} официални {word}{comp_summary}"
+        if off and fr:
+            return f"последните {played} мача ({off} официални + {fr} приятелски){comp_summary}"
+        if fr and not off:
+            return f"последните {played} мача (приятелски срещи)"
 
-        if len(labels) > 3:
-            summary = ", ".join(labels[:3]) + f" + още {len(comps) - 3}"
-        else:
-            summary = ", ".join(labels)
-        return f"последните {played} мача ({summary})"
+        return f"последните {played} приключили мача{comp_summary}"
+
+    @staticmethod
+    def _comparison_key_factors(
+        home: str,
+        away: str,
+        hs: dict,
+        as_: dict,
+    ) -> list[str]:
+        factors: list[str] = []
+        h_avg_s = float(hs.get("avg_score") or 0)
+        a_avg_s = float(as_.get("avg_score") or 0)
+        h_avg_c = float(hs.get("avg_conc") or 0)
+        a_avg_c = float(as_.get("avg_conc") or 0)
+        scope   = hs.get("source_label") or "последните мачове"
+
+        if h_avg_s > 0 and a_avg_s > 0 and h_avg_s != a_avg_s:
+            if h_avg_s > a_avg_s:
+                pct = round((h_avg_s - a_avg_s) / a_avg_s * 100)
+                factors.append(
+                    f"{home} отбелязва с {pct}% повече голове средно "
+                    f"({h_avg_s:.2f} срещу {a_avg_s:.2f} — {scope})"
+                )
+            else:
+                pct = round((a_avg_s - h_avg_s) / h_avg_s * 100)
+                factors.append(
+                    f"{away} отбелязва с {pct}% повече голове средно "
+                    f"({a_avg_s:.2f} срещу {h_avg_s:.2f} — {scope})"
+                )
+
+        if h_avg_c > 0 and a_avg_c > 0 and h_avg_c != a_avg_c:
+            if h_avg_c < a_avg_c:
+                pct = round((1 - h_avg_c / a_avg_c) * 100)
+                factors.append(
+                    f"{home} допуска {pct}% по-малко голове средно "
+                    f"({h_avg_c:.2f} срещу {a_avg_c:.2f} — {scope})"
+                )
+            else:
+                pct = round((1 - a_avg_c / h_avg_c) * 100)
+                factors.append(
+                    f"{away} допуска {pct}% по-малко голове средно "
+                    f"({a_avg_c:.2f} срещу {h_avg_c:.2f} — {scope})"
+                )
+
+        return factors
 
     @staticmethod
     def _h2h_key_factor(h2h: list, h2h_count: int, avg_h2h_goals: float) -> str:
@@ -470,13 +551,28 @@ class PreMatchEngine:
             result["away"] = self._get_squad_players(away_id, 6)
         return result
 
+    @staticmethod
+    def _coach_display_name(entry: dict) -> str:
+        first = (entry.get("firstname") or "").strip()
+        last  = (entry.get("lastname") or "").strip()
+        if first and last:
+            parts = last.split()
+            if len(parts) == 1:
+                family = parts[0]
+            elif len(parts[0]) >= 6:
+                family = parts[0]
+            else:
+                family = parts[-1]
+            return f"{first} {family}"
+        return entry.get("name", "") or ""
+
     def _get_coaches(self, home_id: int, away_id: int) -> dict:
-        """Fetch coach names for both teams."""
+        """Fetch coach names for both teams (prefer full first + last name)."""
         result = {}
         for side, team_id in [("home", home_id), ("away", away_id)]:
             raw = self._get("coachs", {"team": team_id})
             if raw:
-                result[side] = raw[0].get("name", "")
+                result[side] = self._coach_display_name(raw[0])
         return result
 
     def _get_standings(self, league_id: int, season: int, home_id: int, away_id: int) -> dict:
@@ -827,14 +923,7 @@ class PreMatchEngine:
         h2h_factor = self._h2h_key_factor(h2h, h2h_count, avg_h2h_goals)
         if h2h_factor:
             key_factors.append(h2h_factor)
-        if h_avg_s > 0:
-            key_factors.append(
-                f"{home}: средно {h_avg_s:.2f} гола/мач ({hs.get('source_label', 'последни мачове')})"
-            )
-        if a_avg_s > 0:
-            key_factors.append(
-                f"{away}: средно {a_avg_s:.2f} гола/мач ({as_.get('source_label', 'последни мачове')})"
-            )
+        key_factors.extend(self._comparison_key_factors(home, away, hs, as_))
         if _standings_meaningful(h_stand):
             key_factors.append(f"{home} е на {h_stand['position']} място с {h_stand.get('points', 0)} точки")
         if _standings_meaningful(a_stand):
