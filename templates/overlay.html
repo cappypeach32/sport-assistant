@@ -2784,8 +2784,18 @@ function renderPrematch(data) {
     }
 
     function formatH2hSummary(pm, home, away) {
-        const n = pm.h2h_count || (pm.h2h ? pm.h2h.length : 0);
+        const raw = pm.h2h_raw || [];
+        const n = pm.h2h_count || raw.length || (pm.h2h ? pm.h2h.length : 0);
         if (!n) return "";
+        const latest = raw[0];
+        if (latest) {
+            const res = `${latest.home} ${latest.home_goals}:${latest.away_goals} ${latest.away}`;
+            const comp = latest.competition ? `, ${latest.competition}` : "";
+            if (n === 1) {
+                return `1 директна среща (${latest.date}): ${res}${comp}`;
+            }
+            return `${n} директни срещи, средно ${pm.avg_h2h_goals} гола · последна (${latest.date}): ${res}${comp} · ${home} ${pm.h2h_home_wins}П · ${away} ${pm.h2h_away_wins}П`;
+        }
         const meet = n === 1 ? "1 директна среща" : `${n} директни срещи`;
         return `${meet}, средно ${pm.avg_h2h_goals} гола · ${home} ${pm.h2h_home_wins}П · ${away} ${pm.h2h_away_wins}П`;
     }
@@ -2812,6 +2822,7 @@ function renderPrematch(data) {
             <div class="pt-stat">Игри: <span>${stats.played}</span> &nbsp; П:<span>${stats.wins}</span> Р:<span>${stats.draws}</span> З:<span>${stats.losses}</span></div>
             <div class="pt-stat">Голове: <span>${stats.scored}</span> вкарани / <span>${stats.conceded}</span> допуснати</div>
             ${stats.avg_score != null ? `<div class="pt-stat">Средно: <span>${Number(stats.avg_score).toFixed(2)}</span> гола/мач</div>` : ''}
+            ${stats.source_label ? `<div class="pt-stat" style="font-size:11px;color:var(--muted);line-height:1.4">📊 ${stats.source_label}</div>` : ''}
             ` : ''}
             ${standingBadge(standing)}
             ${hasForm ? `<div class="pt-form" style="margin-top:8px">${formDots(formStr)}</div>` : ''}

@@ -255,11 +255,15 @@ class PreMatchEngine:
         if raw:
             wins = draws = losses = scored = conceded = 0
             form = []
+            comp_names: list[str] = []
 
             for f in raw:
                 home_id    = f["teams"]["home"]["id"]
                 home_goals = f["goals"].get("home") or 0
                 away_goals = f["goals"].get("away") or 0
+                comp_name  = (f.get("league") or {}).get("name", "") or ""
+                if comp_name and comp_name not in comp_names:
+                    comp_names.append(comp_name)
 
                 if home_id == team_id:
                     s_goals, c_goals = home_goals, away_goals
@@ -293,6 +297,8 @@ class PreMatchEngine:
                 "form_str":  "".join(form) if form else "—",
                 "clean_sheets":      sum(1 for f in form if f == "W"),
                 "failed_to_score":   0,
+                "source":            "recent_fixtures",
+                "competitions":      comp_names,
             }
 
         # Fallback: league statistics (works for domestic leagues)
@@ -329,7 +335,59 @@ class PreMatchEngine:
             "form_str":  form_str[-5:] if form_str else "—",
             "clean_sheets": s.get("clean_sheet", {}).get("total", 0) or 0,
             "failed_to_score": s.get("failed_to_score", {}).get("total", 0) or 0,
+            "source":            "league_season",
+            "competitions":      [],
         }
+
+    @staticmethod
+    def _friendly_comp_label(name: str) -> str:
+        low = (name or "").lower()
+        if "friend" in low:
+            return "приятелски срещи"
+        return name
+
+    def _stats_source_label(self, stats: dict, league_name: str = "") -> str:
+        """Human-readable scope for form/goal averages shown in UI."""
+        if stats.get("source") == "league_season":
+            ln = league_name or "лигата"
+            return f"статистика за текущия сезон в {ln}"
+
+        played = stats.get("played") or 0
+        comps  = stats.get("competitions") or []
+        if not played:
+            return "няма скорошна форма"
+
+        if not comps:
+            return f"последните {played} приключили мача (всички турнири)"
+
+        labels = [self._friendly_comp_label(c) for c in comps[:4]]
+        if len(comps) == 1:
+            return f"последните {played} мача ({labels[0]})"
+
+        if len(labels) > 3:
+            summary = ", ".join(labels[:3]) + f" + още {len(comps) - 3}"
+        else:
+            summary = ", ".join(labels)
+        return f"последните {played} мача ({summary})"
+
+    @staticmethod
+    def _h2h_key_factor(h2h: list, h2h_count: int, avg_h2h_goals: float) -> str:
+        if h2h_count <= 0:
+            return ""
+        latest = h2h[0]
+        hg = latest.get("home_goals", 0) or 0
+        ag = latest.get("away_goals", 0) or 0
+        result = f"{latest.get('home', '?')} {hg}:{ag} {latest.get('away', '?')}"
+        date = latest.get("date", "")
+        comp = latest.get("competition", "")
+        comp_bit = f", {comp}" if comp else ""
+
+        if h2h_count == 1:
+            return f"1 директна среща ({date}): {result}{comp_bit}"
+        return (
+            f"{h2h_count} директни срещи, средно {avg_h2h_goals} гола; "
+            f"последна ({date}): {result}{comp_bit}"
+        )
 
     def _get_top_scorers(self, league_id: int, season: int, home_id: int, away_id: int) -> dict:
         """
@@ -688,8 +746,10 @@ class PreMatchEngine:
                 return "Няма данни"
             return " → ".join(FORM_LABELS.get(r, r) for r in form_list)
 
-        hs = home_stats
-        as_ = away_stats
+        hs = dict(home_stats or {})
+        as_ = dict(away_stats or {})
+        hs["source_label"] = self._stats_source_label(hs, league)
+        as_["source_label"] = self._stats_source_label(as_, league)
 
         home_form_bg = form_bg(hs.get("form", []))
         away_form_bg = form_bg(as_.get("form", []))
@@ -730,10 +790,11 @@ class PreMatchEngine:
         home_advantages = []
         away_advantages = []
 
+        form_scope = "в последните мачове" if hs.get("source") != "league_season" else "в сезона"
         if hs.get("wins", 0) > as_.get("wins", 0):
-            home_advantages.append("По-добри резултати в сезона")
-        else:
-            away_advantages.append("По-добри резултати в сезона")
+            home_advantages.append(f"По-добри резултати {form_scope}")
+        elif as_.get("wins", 0) > hs.get("wins", 0):
+            away_advantages.append(f"По-добри резултати {form_scope}")
 
         h_avg_s = float(hs.get("avg_score") or 0)
         a_avg_s = float(as_.get("avg_score") or 0)
@@ -763,15 +824,17 @@ class PreMatchEngine:
 
         # Key factors
         key_factors = []
-        if h2h_count > 0 and avg_h2h_goals > 0:
-            if h2h_count == 1:
-                key_factors.append(f"1 директна среща, средно {avg_h2h_goals} гола между отборите")
-            else:
-                key_factors.append(f"{h2h_count} директни срещи, средно {avg_h2h_goals} гола между отборите")
+        h2h_factor = self._h2h_key_factor(h2h, h2h_count, avg_h2h_goals)
+        if h2h_factor:
+            key_factors.append(h2h_factor)
         if h_avg_s > 0:
-            key_factors.append(f"{home} вкарва средно {h_avg_s:.2f} гола на мач тази сезон")
+            key_factors.append(
+                f"{home}: средно {h_avg_s:.2f} гола/мач ({hs.get('source_label', 'последни мачове')})"
+            )
         if a_avg_s > 0:
-            key_factors.append(f"{away} вкарва средно {a_avg_s:.2f} гола на мач тази сезон")
+            key_factors.append(
+                f"{away}: средно {a_avg_s:.2f} гола/мач ({as_.get('source_label', 'последни мачове')})"
+            )
         if _standings_meaningful(h_stand):
             key_factors.append(f"{home} е на {h_stand['position']} място с {h_stand.get('points', 0)} точки")
         if _standings_meaningful(a_stand):

@@ -620,6 +620,7 @@ def build_overlay_response(
             "away_advantages": pm_data.get("away_advantages", []),
             "key_factors":     pm_data.get("key_factors", []),
             "h2h":             pm_data.get("h2h", []),
+            "h2h_raw":         pm_data.get("h2h_raw", []),
             "h2h_home_wins":   pm_data.get("h2h_home_wins", 0),
             "h2h_away_wins":   pm_data.get("h2h_away_wins", 0),
             "h2h_count":       pm_data.get("h2h_count", 0),
