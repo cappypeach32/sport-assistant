@@ -27,6 +27,7 @@ from data.director.prematch_engine import PreMatchEngine, _is_live, _is_ns
 
 # Phase 3 — Live Win Probability
 from data.director.win_probability import calculate as calc_win_prob
+from data.director.broadcast_package import build_halftime_package, build_fulltime_package
 
 
 # =====================================================
@@ -321,7 +322,7 @@ def build_live_intelligence(match: dict, minute: int) -> dict:
 
     # --- Real stats ---
     stats = stats_collector.get_live_stats(fixture_id)
-    lineups = stats_collector.get_lineups(fixture_id)
+    lineups = stats_collector.get_lineups(fixture_id, home, away)
 
     # Consider stats valid if the API returned team names AND at least one meaningful stat
     has_api_response = bool(stats.get("home_team") or stats.get("away_team"))
@@ -391,11 +392,23 @@ def build_live_intelligence(match: dict, minute: int) -> dict:
 # CORE MATCH BUILDER
 # =====================================================
 
+def _should_show_ht_package(match: dict, phase: str) -> bool:
+    if is_halftime(match):
+        return True
+    short = (match.get("status_short") or "").upper()
+    if short == "2H" and phase == "live":
+        return True
+    status = (match.get("status") or "").lower()
+    return phase == "live" and "second half" in status
+
+
 def build_overlay_response(
     match: dict,
     intelligence: dict | None = None,
     prematch: dict | None = None,
     live_narrative: str = "",
+    halftime_analysis: str = "",
+    postmatch_summary: str = "",
 ) -> dict:
 
     if not match:
@@ -504,6 +517,37 @@ def build_overlay_response(
             away_name  = away,
         )
 
+    lineups_detail: dict = {"home": {}, "away": {}}
+    recent_subs: list = []
+    if fixture_id:
+        lineups_detail = stats_collector.get_lineups(fixture_id, home, away)
+        if match_phase in ("live", "finished"):
+            for ev in stats_collector.get_events(fixture_id):
+                if ev.get("type") == "subst":
+                    recent_subs.append({
+                        "minute": ev.get("minute", 0),
+                        "team":   ev.get("team", ""),
+                        "player": ev.get("player", ""),
+                    })
+            recent_subs.sort(key=lambda x: x.get("minute", 0), reverse=True)
+            recent_subs = recent_subs[:8]
+
+    stats_for_pkg = {
+        "home": stats.get("home", {}) if real_available else {},
+        "away": stats.get("away", {}) if real_available else {},
+    }
+    broadcast_package: dict = {"active": False}
+    score_h = int(live_hg or 0)
+    score_a = int(live_ag or 0)
+    if _should_show_ht_package(match, match_phase):
+        broadcast_package = build_halftime_package(
+            home, away, score_h, score_a, stats_for_pkg, halftime_analysis
+        )
+    elif match_phase == "finished":
+        broadcast_package = build_fulltime_package(
+            home, away, score_h, score_a, stats_for_pkg, postmatch_summary
+        )
+
     return {
         "type":    "LIVE_UPDATE",
         "success": True,
@@ -589,12 +633,16 @@ def build_overlay_response(
 
         "table_impact":      table_impact,
         "win_probability":   win_prob,
-        "postmatch_summary": "",   # filled by loop
+        "postmatch_summary": postmatch_summary,
         "commentary_queue":  [],   # filled by loop
 
         # Phase 2 — live narrative (Bulgarian, updated by key moments)
         "live_narrative": live_narrative,
-        "halftime_analysis": "",  # filled in build_overlay_response caller if available
+        "halftime_analysis": halftime_analysis,
+
+        "broadcast_package": broadcast_package,
+        "lineups_detail":    lineups_detail,
+        "recent_subs":       recent_subs,
 
         "meta": {
             "mode":          "AI_MATCH_INTELLIGENCE_V3",
@@ -776,10 +824,10 @@ async def live_stats_loop():
                 intelligence=intelligence,
                 prematch=latest_prematch,
                 live_narrative=latest_narrative,
+                halftime_analysis=latest_halftime,
+                postmatch_summary=latest_postmatch,
             )
-            payload["halftime_analysis"]  = latest_halftime
-            payload["postmatch_summary"]  = latest_postmatch
-            payload["commentary_queue"]   = latest_commentary
+            payload["commentary_queue"] = latest_commentary
             latest_health = {
                 "last_poll_at": datetime.now(timezone.utc).isoformat(),
                 "last_error":   "",
@@ -1035,10 +1083,10 @@ async def select_match(request: Request):
                 intelligence=latest_intelligence or {},
                 prematch=latest_prematch,
                 live_narrative=latest_narrative,
+                halftime_analysis=latest_halftime,
+                postmatch_summary=latest_postmatch,
             )
-            payload["halftime_analysis"] = latest_halftime
-            payload["postmatch_summary"] = latest_postmatch
-            payload["commentary_queue"]  = latest_commentary
+            payload["commentary_queue"] = latest_commentary
             await broadcast(payload)
 
             pm_data = cached_pm.get("data", {})
@@ -1084,10 +1132,10 @@ async def _load_prematch_async(fixture_id: int, match: dict):
                 intelligence=latest_intelligence or {},
                 prematch=latest_prematch,
                 live_narrative=latest_narrative,
+                halftime_analysis=latest_halftime,
+                postmatch_summary=latest_postmatch,
             )
-            payload["halftime_analysis"] = latest_halftime
-            payload["postmatch_summary"] = latest_postmatch
-            payload["commentary_queue"]  = latest_commentary
+            payload["commentary_queue"] = latest_commentary
             await broadcast(payload)
             return
 
@@ -1105,10 +1153,10 @@ async def _load_prematch_async(fixture_id: int, match: dict):
             intelligence=latest_intelligence or {},
             prematch=latest_prematch,
             live_narrative=latest_narrative,
+            halftime_analysis=latest_halftime,
+            postmatch_summary=latest_postmatch,
         )
-        payload["halftime_analysis"] = latest_halftime
-        payload["postmatch_summary"] = latest_postmatch
-        payload["commentary_queue"]  = latest_commentary
+        payload["commentary_queue"] = latest_commentary
         await broadcast(payload)
 
         if result.get("data", {}).get("gpt_narrative"):
@@ -1129,10 +1177,10 @@ async def _load_prematch_async(fixture_id: int, match: dict):
                 intelligence=latest_intelligence or {},
                 prematch=latest_prematch,
                 live_narrative=latest_narrative,
+                halftime_analysis=latest_halftime,
+                postmatch_summary=latest_postmatch,
             )
-            payload["halftime_analysis"] = latest_halftime
-            payload["postmatch_summary"] = latest_postmatch
-            payload["commentary_queue"]  = latest_commentary
+            payload["commentary_queue"] = latest_commentary
             await broadcast(payload)
 
     except Exception as e:
@@ -1159,10 +1207,10 @@ async def ws_endpoint(websocket: WebSocket):
                 intelligence=latest_intelligence or {},
                 prematch=latest_prematch,
                 live_narrative=latest_narrative,
+                halftime_analysis=latest_halftime,
+                postmatch_summary=latest_postmatch,
             )
-            init_payload["halftime_analysis"] = latest_halftime
-            init_payload["postmatch_summary"] = latest_postmatch
-            init_payload["commentary_queue"]  = latest_commentary
+            init_payload["commentary_queue"] = latest_commentary
             await websocket.send_json(init_payload)
         else:
             await websocket.send_json({"type": "WAITING_MATCH"})

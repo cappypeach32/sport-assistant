@@ -200,6 +200,7 @@
     alertsOn = !alertsOn;
     localStorage.setItem(ALERTS_KEY, alertsOn ? "1" : "0");
     updateAlertsBtn();
+    if (typeof window._refreshPreflight === "function") window._refreshPreflight();
     if (alertsOn && "Notification" in window && Notification.permission === "default") {
       Notification.requestPermission();
     }

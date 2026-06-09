@@ -83,6 +83,35 @@ body {
     font-size: 0.85rem; font-weight: 700; cursor: pointer;
 }
 .alert-btn.on { border-color: var(--green); color: var(--green); }
+
+.section-broadcast {
+    border: 2px solid var(--green);
+    background: linear-gradient(135deg, rgba(0,255,153,0.12), rgba(77,159,255,0.06));
+}
+.section-broadcast.halftime { border-color: #f97316; }
+.bp-score-lg {
+    font-size: clamp(2.5rem, 8vw, 4rem);
+    font-weight: 900;
+    color: var(--green);
+    text-align: center;
+    margin: 0.5rem 0 1rem;
+}
+.bp-stat-lg {
+    font-size: clamp(1rem, 2.5vw, 1.2rem);
+    color: var(--muted);
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--border);
+}
+.bp-bullet-lg {
+    font-size: clamp(1.15rem, 3vw, 1.45rem);
+    line-height: 1.5;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border);
+}
+.bp-wrap-lg {
+    font-size: clamp(1.2rem, 3.2vw, 1.55rem);
+    line-height: 1.5;
+}
 </style>
 </head>
 <body class="tablet-commentator">
@@ -114,6 +143,15 @@ body {
         <div class="score" id="score">— : —</div>
         <div class="meta" id="competition"></div>
         <div class="minute" id="minute" style="display:none"></div>
+    </div>
+
+    <div class="section section-broadcast" id="sec-broadcast-package" style="display:none">
+        <div class="section-label" id="bp-section-label">Ефирен пакет</div>
+        <div class="bp-score-lg" id="bp-score-lg"></div>
+        <div id="bp-stats-lg"></div>
+        <div id="bp-bullets-lg"></div>
+        <div class="bp-wrap-lg" id="bp-wrap-lg"></div>
+        <div class="empty" id="bp-loading-lg" style="display:none;padding:0.5rem 0;font-size:0.95rem"></div>
     </div>
 
     <div class="section" id="sec-narrative" style="display:none">
@@ -174,12 +212,55 @@ function update(data) {
         minEl.style.display = "none";
     }
 
-    const nar = data.live_narrative || "";
+    const pkg = data.broadcast_package || {};
+    const bpSec = document.getElementById("sec-broadcast-package");
+    if (pkg.active && bpSec) {
+        bpSec.style.display = "block";
+        bpSec.classList.toggle("halftime", pkg.phase === "halftime");
+        document.getElementById("bp-section-label").textContent = pkg.title || "Ефирен пакет";
+        document.getElementById("bp-score-lg").textContent = pkg.score_label || "";
+        document.getElementById("bp-stats-lg").innerHTML = (pkg.stats_lines || []).map(l =>
+            `<div class="bp-stat-lg">${l}</div>`
+        ).join("");
+        const bulletsEl = document.getElementById("bp-bullets-lg");
+        const wrapEl = document.getElementById("bp-wrap-lg");
+        const loadEl = document.getElementById("bp-loading-lg");
+        if (pkg.phase === "halftime") {
+            bulletsEl.innerHTML = (pkg.bullets || []).map(b =>
+                `<div class="bp-bullet-lg">▸ ${b}</div>`
+            ).join("");
+            bulletsEl.style.display = "block";
+            wrapEl.style.display = "none";
+        } else {
+            bulletsEl.style.display = "none";
+            wrapEl.style.display = "block";
+            wrapEl.textContent = pkg.wrap_up || "";
+        }
+        if (loadEl) {
+            if (pkg.detail_loading) {
+                loadEl.style.display = "block";
+                loadEl.textContent = pkg.phase === "halftime"
+                    ? "GPT полувременен анализ се генерира..."
+                    : "GPT финален анализ се генерира...";
+            } else {
+                loadEl.style.display = "none";
+            }
+        }
+    } else if (bpSec) {
+        bpSec.style.display = "none";
+    }
+
     const narSec = document.getElementById("sec-narrative");
-    if (nar && data.phase === "live") {
+    const htFtText = pkg.active
+        ? (pkg.phase === "fulltime" ? (data.postmatch_summary || "") : (data.halftime_analysis || ""))
+        : "";
+    const liveNar = data.live_narrative || "";
+    const narText = htFtText || (data.phase === "live" ? liveNar : "");
+
+    if (narText && narSec) {
         narSec.style.display = "block";
-        document.getElementById("narrative").textContent = nar;
-    } else {
+        document.getElementById("narrative").textContent = narText;
+    } else if (narSec) {
         narSec.style.display = "none";
     }
 

@@ -863,6 +863,133 @@ body {
 .health-warn { background: #eab308; }
 .health-err  { background: var(--red); animation: pulse 1.5s infinite; }
 
+/* ===== PRE-FLIGHT CHECKLIST ===== */
+.preflight-checklist {
+    display: none;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: rgba(0,255,153,0.04);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 12px;
+}
+.preflight-checklist.all-ok {
+    border-color: var(--green);
+    background: rgba(0,255,153,0.08);
+    box-shadow: 0 0 12px rgba(0,255,153,0.12);
+}
+.preflight-title {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin-bottom: 8px;
+}
+.preflight-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    color: var(--text);
+}
+.preflight-item .pf-icon { width: 16px; text-align: center; font-weight: 800; }
+.preflight-item.ok .pf-icon { color: var(--green); }
+.preflight-item.pending .pf-icon { color: var(--muted); }
+
+/* ===== BROADCAST PACKAGE (HT/FT) ===== */
+.card-broadcast-package {
+    border: 2px solid var(--orange);
+    background: linear-gradient(135deg, rgba(255,136,68,0.08), rgba(0,255,153,0.04));
+    animation: slideIn .35s ease;
+}
+.card-broadcast-package.phase-fulltime {
+    border-color: var(--green);
+    background: linear-gradient(135deg, rgba(0,255,153,0.1), rgba(77,159,255,0.04));
+}
+.bp-score {
+    font-size: clamp(2rem, 5vw, 3rem);
+    font-weight: 900;
+    text-align: center;
+    color: var(--green);
+    margin: 8px 0 14px;
+    letter-spacing: -0.02em;
+}
+.bp-stats { margin-bottom: 12px; }
+.bp-stat-line {
+    font-size: 14px;
+    color: var(--muted);
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+}
+.bp-stat-line:last-child { border-bottom: none; }
+.bp-bullets { list-style: none; padding: 0; margin: 0; }
+.bp-bullets li {
+    position: relative;
+    padding: 10px 0 10px 18px;
+    font-size: 16px;
+    line-height: 1.45;
+    border-bottom: 1px solid var(--border);
+}
+.bp-bullets li:last-child { border-bottom: none; }
+.bp-bullets li::before {
+    content: "▸";
+    position: absolute;
+    left: 0;
+    color: var(--orange);
+    font-weight: 800;
+}
+.bp-wrap {
+    font-size: 17px;
+    line-height: 1.55;
+    color: var(--text);
+}
+.bp-loading {
+    font-size: 12px;
+    color: var(--orange);
+    font-style: italic;
+    margin-top: 8px;
+}
+
+/* ===== LINEUPS ===== */
+.lineups-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+@media (max-width: 700px) { .lineups-grid { grid-template-columns: 1fr; } }
+.lineup-side-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--green);
+    margin-bottom: 6px;
+}
+.lineup-meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 10px;
+}
+.lineup-section-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin: 10px 0 6px;
+}
+.lineup-player {
+    font-size: 14px;
+    padding: 3px 0;
+    color: var(--text);
+}
+.lineup-player .num { color: var(--blue); font-weight: 700; margin-right: 6px; }
+.lineup-player .pos { color: var(--muted); font-size: 11px; }
+.recent-subs-list { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.recent-sub-item {
+    font-size: 13px;
+    color: var(--muted);
+    padding: 3px 0;
+}
+
 </style>
 </head>
 
@@ -925,6 +1052,11 @@ body {
             </div>
         </div>
 
+        <div class="preflight-checklist" id="preflight-checklist">
+            <div class="preflight-title">Чеклист преди ефир</div>
+            <div id="preflight-items"></div>
+        </div>
+
         <div class="tablet-bar">
             <button type="button" class="tablet-btn" onclick="TabletMode.changeFont(-0.1)" title="По-малък шрифт">A−</button>
             <button type="button" class="tablet-btn" id="font-scale-label" style="min-width:52px">100%</button>
@@ -985,6 +1117,26 @@ body {
             </div>
 
         </div>
+    </div>
+
+    <!-- HT/FT BROADCAST PACKAGE -->
+    <div class="card card-broadcast-package" id="card-broadcast-package" style="display:none">
+        <div class="card-label" id="bp-label">
+            <span class="dot" style="background:var(--orange)"></span>
+            <span id="bp-title">Ефирен пакет</span>
+        </div>
+        <div class="bp-score" id="bp-score"></div>
+        <div class="bp-stats" id="bp-stats"></div>
+        <ul class="bp-bullets" id="bp-bullets"></ul>
+        <div class="bp-wrap" id="bp-wrap"></div>
+        <div class="bp-loading" id="bp-loading" style="display:none"></div>
+    </div>
+
+    <!-- LINEUPS -->
+    <div class="card" id="card-lineups" style="display:none">
+        <div class="card-label"><span class="dot" style="background:var(--blue)"></span> Състави</div>
+        <div class="lineups-grid" id="lineups-grid"></div>
+        <div class="recent-subs-list" id="recent-subs-list" style="display:none"></div>
     </div>
 
     <!-- LIVE NARRATIVE -->
@@ -1398,6 +1550,7 @@ function selectMatch(id) {
 
     if (!sameMatch) {
         _prematchRenderedKey = "";
+        _lastBpKey = "";
         TabletMode.resetAlertsForMatch();
         const postC = document.getElementById("postmatch-sections");
         if (postC) { postC.innerHTML = ""; delete postC.dataset.rendered; }
@@ -1533,6 +1686,174 @@ function renderHealth(data) {
         setText("health-poll-text", "Обновено: —");
     }
 
+    renderPreflightChecklist(data);
+}
+
+function shouldShowPreflight(data) {
+    if (!state.selectedId) return false;
+    const phase = data?.phase || "";
+    if (phase === "prematch") return true;
+    const start = data?.match?.start_time;
+    if (start) {
+        const diff = new Date(start).getTime() - Date.now();
+        return diff > 0 && diff <= 5 * 60 * 1000;
+    }
+    return false;
+}
+
+function renderPreflightChecklist(data) {
+    const box = document.getElementById("preflight-checklist");
+    const itemsEl = document.getElementById("preflight-items");
+    if (!box || !itemsEl) return;
+
+    if (!shouldShowPreflight(data)) {
+        box.style.display = "none";
+        return;
+    }
+
+    box.style.display = "block";
+    const items = [
+        { ok: !!(data?.match?.raw_id || state.selectedId), label: "Мач избран" },
+        { ok: !!(data?.prematch?.gpt_narrative), label: "GPT guide готов" },
+        { ok: _wsConnected, label: "WebSocket свързан" },
+        { ok: TabletMode.isAlertsOn(), label: "Аларми включени" },
+        { ok: data?.meta?.health?.api_ok === true, label: "API OK" },
+    ];
+    const allOk = items.every(i => i.ok);
+    box.classList.toggle("all-ok", allOk);
+    itemsEl.innerHTML = items.map(i => `
+        <div class="preflight-item ${i.ok ? "ok" : "pending"}">
+            <span class="pf-icon">${i.ok ? "✓" : "○"}</span>
+            <span>${i.label}</span>
+        </div>`).join("");
+}
+
+/* =========================================================
+   BROADCAST PACKAGE (HT / FT)
+   ========================================================= */
+let _lastBpKey = "";
+
+function renderBroadcastPackage(data) {
+    const card = document.getElementById("card-broadcast-package");
+    if (!card) return;
+
+    const pkg = data.broadcast_package || {};
+    if (!pkg.active) {
+        card.style.display = "none";
+        _lastBpKey = "";
+        return;
+    }
+
+    const key = `${pkg.phase}:${pkg.score_label}:${(pkg.bullets || []).join("|")}:${pkg.wrap_up || ""}`;
+    card.style.display = "block";
+    card.classList.toggle("phase-fulltime", pkg.phase === "fulltime");
+
+    if (key === _lastBpKey) return;
+    _lastBpKey = key;
+
+    setText("bp-title", pkg.title || "Ефирен пакет");
+    setText("bp-score", pkg.score_label || "");
+
+    const statsEl = document.getElementById("bp-stats");
+    if (statsEl) {
+        statsEl.innerHTML = (pkg.stats_lines || []).map(l =>
+            `<div class="bp-stat-line">${l}</div>`
+        ).join("");
+    }
+
+    const bulletsEl = document.getElementById("bp-bullets");
+    const wrapEl = document.getElementById("bp-wrap");
+    const loadEl = document.getElementById("bp-loading");
+
+    if (pkg.phase === "halftime") {
+        if (bulletsEl) {
+            bulletsEl.style.display = "block";
+            bulletsEl.innerHTML = (pkg.bullets || []).map(b => `<li>${b}</li>`).join("");
+        }
+        if (wrapEl) wrapEl.style.display = "none";
+    } else {
+        if (bulletsEl) bulletsEl.style.display = "none";
+        if (wrapEl) {
+            wrapEl.style.display = "block";
+            wrapEl.textContent = pkg.wrap_up || "";
+        }
+    }
+
+    if (loadEl) {
+        if (pkg.detail_loading) {
+            loadEl.style.display = "block";
+            loadEl.textContent = pkg.phase === "halftime"
+                ? "GPT полувременен анализ се генерира..."
+                : "GPT финален анализ се генерира...";
+        } else {
+            loadEl.style.display = "none";
+        }
+    }
+}
+
+/* =========================================================
+   LINEUPS
+   ========================================================= */
+function formatLineupPlayer(p) {
+    const num = p.number != null ? `<span class="num">#${p.number}</span>` : "";
+    const pos = p.pos ? `<span class="pos">${p.pos}</span>` : "";
+    return `<div class="lineup-player">${num}${p.name || "—"} ${pos}</div>`;
+}
+
+function renderLineupSide(side, label) {
+    if (!side || !(side.starting || []).length) {
+        return `<div><div class="lineup-side-title">${label}</div>
+            <div class="lineup-meta" style="color:var(--muted)">Няма данни</div></div>`;
+    }
+    const coach = side.coach ? `Треньор: ${side.coach}` : "";
+    const form = side.formation ? `[${side.formation}]` : "";
+    const starting = (side.starting || []).map(formatLineupPlayer).join("");
+    const bench = (side.bench || []).length
+        ? (side.bench || []).map(formatLineupPlayer).join("")
+        : '<div class="lineup-player" style="color:var(--muted)">—</div>';
+    return `
+        <div>
+            <div class="lineup-side-title">${label}</div>
+            <div class="lineup-meta">${form} ${coach}</div>
+            <div class="lineup-section-label">Стартови 11</div>
+            ${starting}
+            <div class="lineup-section-label">Скамейка</div>
+            ${bench}
+        </div>`;
+}
+
+function renderLineups(data) {
+    const card = document.getElementById("card-lineups");
+    const grid = document.getElementById("lineups-grid");
+    const subsEl = document.getElementById("recent-subs-list");
+    if (!card || !grid) return;
+
+    const ld = data.lineups_detail || {};
+    const home = data.match?.home || "Домакин";
+    const away = data.match?.away || "Гост";
+    const hasPlayers = (ld.home?.starting?.length || 0) + (ld.away?.starting?.length || 0) > 0;
+
+    if (!hasPlayers) {
+        card.style.display = "none";
+        return;
+    }
+
+    card.style.display = "block";
+    grid.innerHTML = renderLineupSide(ld.home, home) + renderLineupSide(ld.away, away);
+
+    const subs = data.recent_subs || [];
+    if (subsEl) {
+        if (subs.length && data.phase !== "prematch") {
+            subsEl.style.display = "block";
+            subsEl.innerHTML = `
+                <div class="lineup-section-label">Последни смени</div>
+                ${subs.map(s => `
+                    <div class="recent-sub-item">${s.minute}' ${s.team} — ${s.player}</div>
+                `).join("")}`;
+        } else {
+            subsEl.style.display = "none";
+        }
+    }
 }
 
 /* =========================================================
@@ -2506,9 +2827,9 @@ function renderPrematch(data) {
    PHASE-AWARE CARD VISIBILITY
    ========================================================= */
 function showCardsForPhase(phase) {
-    const liveCards     = ["card-momentum","card-moments","card-tactical","card-stats","card-events","card-narrative","card-table-impact","card-win-prob","card-commentary"];
-    const finishedCards = ["card-postmatch","card-win-prob","card-stats","card-events"];
-    const prematchCards = ["card-prematch"];
+    const liveCards     = ["card-momentum","card-moments","card-tactical","card-stats","card-events","card-narrative","card-table-impact","card-win-prob","card-commentary","card-lineups"];
+    const finishedCards = ["card-postmatch","card-win-prob","card-stats","card-events","card-lineups"];
+    const prematchCards = ["card-prematch","card-lineups"];
 
     document.getElementById("card-header").style.display  = "block";
     document.getElementById("waiting-state").style.display = "none";
@@ -2563,6 +2884,9 @@ function update(data) {
             showCardsForPhase(phase);
         }
         renderHeader(m, data);
+        renderBroadcastPackage(data);
+        renderLineups(data);
+        renderPreflightChecklist(data);
         renderPrematch(data);
         renderLiveNarrative(data);
         renderHalftimeAnalysis(data);
@@ -2702,6 +3026,8 @@ function setText(id, val) {
     const el = document.getElementById(id);
     if (el) el.textContent = val !== undefined && val !== null ? val : "";
 }
+
+window._refreshPreflight = () => renderPreflightChecklist(state.lastData);
 
 </script>
 <script src="/static/tablet.js"></script>

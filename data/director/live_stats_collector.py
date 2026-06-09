@@ -129,26 +129,70 @@ class LiveStatsCollector:
     # LINEUPS & FORMATIONS
     # --------------------------------------------------
 
-    def get_lineups(self, fixture_id: int) -> dict:
+    @staticmethod
+    def _parse_players(items: list) -> list[dict]:
+        players = []
+        for item in items or []:
+            p = item.get("player") or {}
+            name = p.get("name") or ""
+            if not name:
+                continue
+            players.append({
+                "name":   name,
+                "number": p.get("number"),
+                "pos":    item.get("pos") or "",
+            })
+        return players
+
+    def get_lineups(self, fixture_id: int, home_name: str = "", away_name: str = "") -> dict:
         """
-        Returns formations for both teams.
-        Shape: { "home": { "formation": str, "team": str }, "away": {...} }
-        Lineups don't change during match — no TTL.
+        Returns formations and player lists for both teams.
+        Shape: { home: {formation, team, coach, starting[], bench[]}, away: {...} }
         """
-        if fixture_id in self._lineups_cache:
-            return self._lineups_cache[fixture_id]
+        cache_key = f"{fixture_id}:{home_name}:{away_name}"
+        if cache_key in self._lineups_cache:
+            return self._lineups_cache[cache_key]
 
         raw = self._get("fixtures/lineups", {"fixture": fixture_id})
-        lineups: dict = {"home": {}, "away": {}}
+        empty_side = {
+            "formation": "",
+            "team": "",
+            "coach": "",
+            "starting": [],
+            "bench": [],
+        }
+        lineups: dict = {"home": dict(empty_side), "away": dict(empty_side)}
 
-        for i, team_data in enumerate(raw[:2]):
-            side = "home" if i == 0 else "away"
-            lineups[side] = {
-                "formation": team_data.get("formation") or "4-4-2",
-                "team": team_data.get("team", {}).get("name", ""),
+        def _side_key(team_name: str) -> str | None:
+            tn = (team_name or "").lower().strip()
+            hn = (home_name or "").lower().strip()
+            an = (away_name or "").lower().strip()
+            if hn and (tn == hn or hn in tn or tn in hn):
+                return "home"
+            if an and (tn == an or an in tn or tn in an):
+                return "away"
+            return None
+
+        for team_data in raw[:2]:
+            team_name = team_data.get("team", {}).get("name", "") or ""
+            coach = (team_data.get("coach") or {}).get("name", "") or ""
+            side_data = {
+                "formation": team_data.get("formation") or "",
+                "team":      team_name,
+                "coach":     coach,
+                "starting":  self._parse_players(team_data.get("startXI")),
+                "bench":     self._parse_players(team_data.get("substitutes")),
             }
 
-        self._lineups_cache[fixture_id] = lineups
+            key = _side_key(team_name)
+            if key:
+                lineups[key] = side_data
+            elif not lineups["home"]["team"]:
+                lineups["home"] = side_data
+            else:
+                lineups["away"] = side_data
+
+        self._lineups_cache[cache_key] = lineups
         return lineups
 
     # --------------------------------------------------
