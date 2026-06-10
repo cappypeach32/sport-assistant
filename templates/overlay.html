@@ -132,8 +132,22 @@ body {
     margin-top: 4px;
     background: linear-gradient(to bottom, transparent, var(--surface) 40%);
     pointer-events: none;
+    touch-action: none;
 }
 .sidebar-scroll.has-more .sidebar-scroll-hint { display: block; }
+
+/* Sticky fade/hint breaks touch scroll on iOS — hide on compact sidebar */
+@media (max-width: 960px) {
+    .sidebar-scroll.has-more::after {
+        display: none !important;
+    }
+    .sidebar-scroll-hint {
+        display: none !important;
+    }
+    .sidebar-scroll {
+        padding-bottom: calc(24px + var(--safe-bottom, 0px));
+    }
+}
 
 .all-matches-label {
     font-size: 11px;
@@ -1636,13 +1650,20 @@ function getSidebarScrollBox() {
 }
 
 function updateSidebarScrollHint() {
+    const inner = document.getElementById("sidebar-scroll");
+    if (!inner) return;
+
+    if (window.matchMedia("(max-width: 960px)").matches) {
+        inner.classList.remove("has-more");
+        return;
+    }
+
     const box = getSidebarScrollBox();
     if (!box) return;
     requestAnimationFrame(() => {
         const overflow = box.scrollHeight > box.clientHeight + 8;
         const atBottom = box.scrollTop >= box.scrollHeight - box.clientHeight - 6;
-        const inner = document.getElementById("sidebar-scroll");
-        if (inner) inner.classList.toggle("has-more", overflow && !atBottom);
+        inner.classList.toggle("has-more", overflow && !atBottom);
     });
 }
 

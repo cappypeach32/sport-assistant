@@ -159,6 +159,7 @@
         flex: 0 0 auto;
         overflow: visible;
         min-height: auto;
+        padding-bottom: calc(28px + var(--safe-bottom));
     }
 
     body.tablet-overlay .main {
