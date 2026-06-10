@@ -135,29 +135,59 @@ body {
     margin-top: 4px;
 }
 
-.featured-header {
+.sidebar-section {
+    margin-bottom: 8px;
+}
+.sidebar-section-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 4px 0 6px;
+    width: 100%;
+    padding: 10px 8px;
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+    color: inherit;
+    font: inherit;
     cursor: pointer;
+    text-align: left;
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
     user-select: none;
 }
-.featured-header-label {
+.sidebar-section-head:active {
+    background: rgba(0, 255, 153, 0.08);
+    border-color: rgba(0, 255, 153, 0.25);
+}
+.sidebar-section-label {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #eab308;
     font-weight: 800;
+    color: var(--muted);
 }
-.featured-toggle {
+.sidebar-section-featured .sidebar-section-label { color: #eab308; }
+.sidebar-section-agenda .sidebar-section-label { color: var(--green); }
+.sidebar-section-chevron {
     font-size: 10px;
     color: var(--muted);
     transition: transform .2s;
+    flex-shrink: 0;
 }
-.featured-section.collapsed .featured-toggle { transform: rotate(-90deg); }
-.featured-section.collapsed #featured-matches { display: none; }
+.sidebar-section.collapsed .sidebar-section-chevron { transform: rotate(-90deg); }
+.sidebar-section.collapsed .sidebar-section-body { display: none; }
+.sidebar-section-body { padding-top: 6px; }
+.sidebar-section-tools { margin-top: 8px; }
+
+@media (min-width: 961px) {
+    .sidebar-section-tools .sidebar-section-head { display: none; }
+    .sidebar-section-tools .sidebar-section-body {
+        display: block !important;
+        padding-top: 0;
+    }
+}
 
 @media (min-width: 900px) {
     .tablet-hint { display: none !important; }
@@ -707,7 +737,7 @@ body {
 .h2h-scorers { font-size: 13px; color: var(--green); margin-top: 6px; line-height: 1.45; }
 
 .day-agenda {
-    margin: 0 0 12px 0;
+    margin: 0;
     padding: 10px 12px;
     background: var(--surface2);
     border: 1px solid var(--border);
@@ -1193,6 +1223,14 @@ body {
                oninput="filterMatches()"
                style="margin-top:6px"/>
 
+        <div class="sidebar-section sidebar-section-tools" id="section-tools">
+            <button type="button" class="sidebar-section-head" id="section-tools-head"
+                    onclick="toggleSidebarSection('tools')" aria-expanded="false" aria-controls="section-tools-body">
+                <span class="sidebar-section-label">⚙️ Ефир и настройки</span>
+                <span class="sidebar-section-chevron" aria-hidden="true">▼</span>
+            </button>
+            <div class="sidebar-section-body" id="section-tools-body">
+
         <div class="health-bar" id="health-bar">
             <div class="health-item">
                 <span class="health-dot health-warn" id="health-ws-dot"></span>
@@ -1225,19 +1263,31 @@ body {
             <a href="/overlay/commentator" target="_blank" class="view-link">🎙️ Коментатор</a>
             <button type="button" class="alert-btn" id="alert-btn" onclick="TabletMode.toggleAlerts()">🔔 Аларми</button>
         </div>
+
+            </div>
+        </div>
     </div>
 
     <div class="sidebar-scroll" id="sidebar-scroll">
-        <div id="featured-section" class="featured-section" style="display:none">
-            <div class="featured-header" onclick="toggleFeaturedSection()">
-                <span class="featured-header-label" id="featured-header-label">⭐ Препоръчани</span>
-                <span class="featured-toggle" id="featured-toggle">▼</span>
-            </div>
-            <div id="featured-matches"></div>
+        <div id="section-featured" class="sidebar-section sidebar-section-featured collapsed" style="display:none">
+            <button type="button" class="sidebar-section-head" id="section-featured-head"
+                    onclick="toggleSidebarSection('featured')" aria-expanded="false" aria-controls="featured-matches">
+                <span class="sidebar-section-label" id="featured-header-label">⭐ Препоръчани</span>
+                <span class="sidebar-section-chevron" aria-hidden="true">▼</span>
+            </button>
+            <div class="sidebar-section-body" id="featured-matches"></div>
+        </div>
+
+        <div id="section-agenda" class="sidebar-section sidebar-section-agenda collapsed" style="display:none">
+            <button type="button" class="sidebar-section-head" id="section-agenda-head"
+                    onclick="toggleSidebarSection('agenda')" aria-expanded="false" aria-controls="day-agenda">
+                <span class="sidebar-section-label" id="agenda-header-label">📅 Програма</span>
+                <span class="sidebar-section-chevron" aria-hidden="true">▼</span>
+            </button>
+            <div class="sidebar-section-body" id="day-agenda"></div>
         </div>
 
         <div class="all-matches-label" id="all-matches-label" style="display:none">Всички мачове</div>
-        <div id="day-agenda" style="display:none"></div>
         <div class="match-list" id="matches"></div>
         <div class="sidebar-scroll-hint">↓ още мачове</div>
     </div>
@@ -1520,19 +1570,45 @@ function switchTab(tab) {
     renderDayAgenda();
 }
 
-let _featuredCollapsed = localStorage.getItem("featuredCollapsed") === "1";
+const SIDEBAR_SECTIONS = {
+    featured: { el: "section-featured", key: "featuredCollapsed", mobileDefault: true, desktopDefault: false },
+    agenda:   { el: "section-agenda",   key: "sidebarAgendaCollapsed", mobileDefault: true, desktopDefault: false },
+    tools:    { el: "section-tools",    key: "sidebarToolsCollapsed", mobileDefault: true, desktopDefault: false },
+};
 
-function toggleFeaturedSection() {
-    _featuredCollapsed = !_featuredCollapsed;
-    localStorage.setItem("featuredCollapsed", _featuredCollapsed ? "1" : "0");
-    applyFeaturedCollapsed();
+function isCompactSidebar() {
+    return window.matchMedia("(max-width: 960px)").matches;
+}
+
+function getSidebarSectionCollapsed(id) {
+    const cfg = SIDEBAR_SECTIONS[id];
+    if (!cfg) return false;
+    const stored = localStorage.getItem(cfg.key);
+    if (stored === "1") return true;
+    if (stored === "0") return false;
+    return isCompactSidebar() ? cfg.mobileDefault : cfg.desktopDefault;
+}
+
+function toggleSidebarSection(id) {
+    const cfg = SIDEBAR_SECTIONS[id];
+    if (!cfg) return;
+    localStorage.setItem(cfg.key, getSidebarSectionCollapsed(id) ? "0" : "1");
+    applySidebarSection(id);
     updateSidebarScrollHint();
 }
 
-function applyFeaturedCollapsed() {
-    const sec = document.getElementById("featured-section");
+function applySidebarSection(id) {
+    const cfg = SIDEBAR_SECTIONS[id];
+    const sec = document.getElementById(cfg?.el);
     if (!sec) return;
-    sec.classList.toggle("collapsed", _featuredCollapsed);
+    const collapsed = getSidebarSectionCollapsed(id);
+    sec.classList.toggle("collapsed", collapsed);
+    const head = sec.querySelector(".sidebar-section-head");
+    if (head) head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+}
+
+function applyAllSidebarSections() {
+    Object.keys(SIDEBAR_SECTIONS).forEach(applySidebarSection);
 }
 
 function updateSidebarScrollHint() {
@@ -1546,19 +1622,19 @@ function updateSidebarScrollHint() {
 }
 
 function renderFeatured(list) {
-    const sec = document.getElementById("featured-section");
+    const sec = document.getElementById("section-featured");
     const el  = document.getElementById("featured-matches");
     const allLabel = document.getElementById("all-matches-label");
     const headerLabel = document.getElementById("featured-header-label");
     if (!sec || !el) return;
     if (!list?.length) {
         sec.style.display = "none";
-        if (allLabel) allLabel.style.display = "none";
+        if (allLabel && !state.filtered?.length) allLabel.style.display = "none";
         updateSidebarScrollHint();
         return;
     }
     sec.style.display = "block";
-    applyFeaturedCollapsed();
+    applySidebarSection("featured");
     if (headerLabel) headerLabel.textContent = `⭐ Препоръчани (${list.length})`;
     if (allLabel) {
         allLabel.style.display = "block";
@@ -1657,9 +1733,16 @@ function filterMatches() {
     renderMatches(state.filtered);
     renderDayAgenda();
     const allLabel = document.getElementById("all-matches-label");
-    if (allLabel && state.featured?.length) {
-        allLabel.style.display = "block";
-        allLabel.textContent = `Всички мачове (${state.filtered.length})`;
+    if (allLabel) {
+        const n = state.filtered?.length ?? 0;
+        if (state.featured?.length || n) {
+            allLabel.style.display = "block";
+            allLabel.textContent = state.featured?.length
+                ? `Всички мачове (${n})`
+                : (n ? `Мачове (${n})` : "Мачове");
+        } else {
+            allLabel.style.display = "none";
+        }
     }
 }
 
@@ -1679,9 +1762,11 @@ function formatAgendaDateLabel(dateStr) {
 }
 
 function renderDayAgenda() {
+    const section = document.getElementById("section-agenda");
     const el = document.getElementById("day-agenda");
-    if (!el || state.activeTab !== "upcoming") {
-        if (el) el.style.display = "none";
+    const headerLabel = document.getElementById("agenda-header-label");
+    if (!section || !el || state.activeTab !== "upcoming") {
+        if (section) section.style.display = "none";
         return;
     }
 
@@ -1691,16 +1776,19 @@ function renderDayAgenda() {
         .sort((a, b) => (a.start_time || "").localeCompare(b.start_time || ""));
 
     if (dayMatches.length < 2) {
-        el.style.display = "none";
+        section.style.display = "none";
         return;
     }
 
     const now = Date.now();
     const nextIdx = dayMatches.findIndex(m => new Date(m.start_time).getTime() > now);
 
+    if (headerLabel) {
+        headerLabel.textContent = `📅 Програма · ${formatAgendaDateLabel(dateKey)} (${dayMatches.length})`;
+    }
+
     el.innerHTML = `
         <div class="day-agenda">
-            <div class="day-agenda-title">📅 Програма · ${formatAgendaDateLabel(dateKey)} (${dayMatches.length} мача)</div>
             ${dayMatches.map((m, i) => {
                 const id = getId(m);
                 const sel = state.selectedId === id ? " selected" : "";
@@ -1720,7 +1808,9 @@ function renderDayAgenda() {
             </button>` : ""}
         </div>`;
 
-    el.style.display = "block";
+    section.style.display = "block";
+    applySidebarSection("agenda");
+    updateSidebarScrollHint();
     updateDayAgendaCountdown(dayMatches, nextIdx);
 }
 
@@ -3419,6 +3509,9 @@ async function refreshUpcoming() {
 loadMatches();
 loadUpcoming();
 
+applyAllSidebarSections();
+window.matchMedia("(max-width: 960px)").addEventListener("change", applyAllSidebarSections);
+
 document.getElementById("sidebar-scroll")?.addEventListener("scroll", updateSidebarScrollHint);
 window.addEventListener("resize", updateSidebarScrollHint);
 
@@ -3487,6 +3580,5 @@ window.refreshPrematchData = refreshPrematchData;
 
 </script>
 <script src="/static/tablet.js"></script>
-<script>document.addEventListener("DOMContentLoaded", () => TabletMode.init());</script>
 </body>
 </html>

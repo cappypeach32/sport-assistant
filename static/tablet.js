@@ -241,10 +241,11 @@
     }
 
     function setOpen(open) {
-      sidebar.classList.toggle("open", open);
-      if (backdrop) backdrop.classList.toggle("show", open);
-      document.body.classList.toggle("sidebar-open", open && isDrawer());
-      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      const shouldOpen = open && isDrawer();
+      sidebar.classList.toggle("open", shouldOpen);
+      if (backdrop) backdrop.classList.toggle("show", shouldOpen);
+      document.body.classList.toggle("sidebar-open", shouldOpen);
+      toggle.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
     }
 
     function closeSidebar() {
@@ -255,8 +256,14 @@
       if (isDrawer()) setOpen(true);
     }
 
-    toggle.addEventListener("click", () => {
+    function toggleSidebar() {
       setOpen(!sidebar.classList.contains("open"));
+    }
+
+    toggle.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleSidebar();
     });
 
     if (backdrop) {
@@ -274,7 +281,12 @@
     window.ResponsiveLayout = { closeSidebar, openSidebar, isDrawer };
   }
 
+  let initialized = false;
+
   function init() {
+    if (initialized) return;
+    initialized = true;
+
     document.body.classList.add("tablet-mode");
     applyFontScale(getScale());
     registerServiceWorker();
@@ -308,4 +320,10 @@
     resetAlertsForMatch,
     isAlertsOn: () => alertsOn,
   };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();
