@@ -38,10 +38,17 @@ body {
     font-size: 17px;
     color: var(--text);
     overflow: hidden;
-    height: 100vh;
+    height: 100%;
+    height: 100dvh;
 }
 
-.layout { display: flex; height: 100vh; }
+.layout {
+    display: flex;
+    height: 100%;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+}
 
 /* ===== SIDEBAR ===== */
 .sidebar {
@@ -85,11 +92,14 @@ body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     margin: 0 -14px;
     padding: 0 14px 18px;
     scrollbar-width: thin;
     scrollbar-color: rgba(0,255,153,0.35) transparent;
     position: relative;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
 }
 .sidebar-scroll::-webkit-scrollbar { width: 8px; }
 .sidebar-scroll::-webkit-scrollbar-thumb {
@@ -362,13 +372,18 @@ body {
 /* ===== MAIN ===== */
 .main {
     flex: 1;
+    min-height: 0;
+    min-width: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 20px;
     display: flex;
     flex-direction: column;
     gap: 14px;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
 }
 
 /* ===== CARDS ===== */
@@ -1611,15 +1626,27 @@ function applyAllSidebarSections() {
     Object.keys(SIDEBAR_SECTIONS).forEach(applySidebarSection);
 }
 
+function getSidebarScrollBox() {
+    const sidebar = document.getElementById("sidebar");
+    const inner = document.getElementById("sidebar-scroll");
+    if (window.matchMedia("(max-width: 960px)").matches && sidebar?.classList.contains("open")) {
+        return sidebar;
+    }
+    return inner;
+}
+
 function updateSidebarScrollHint() {
-    const box = document.getElementById("sidebar-scroll");
+    const box = getSidebarScrollBox();
     if (!box) return;
     requestAnimationFrame(() => {
         const overflow = box.scrollHeight > box.clientHeight + 8;
         const atBottom = box.scrollTop >= box.scrollHeight - box.clientHeight - 6;
-        box.classList.toggle("has-more", overflow && !atBottom);
+        const inner = document.getElementById("sidebar-scroll");
+        if (inner) inner.classList.toggle("has-more", overflow && !atBottom);
     });
 }
+
+window.updateSidebarScrollHint = updateSidebarScrollHint;
 
 function renderFeatured(list) {
     const sec = document.getElementById("section-featured");
@@ -3512,7 +3539,8 @@ loadUpcoming();
 applyAllSidebarSections();
 window.matchMedia("(max-width: 960px)").addEventListener("change", applyAllSidebarSections);
 
-document.getElementById("sidebar-scroll")?.addEventListener("scroll", updateSidebarScrollHint);
+document.getElementById("sidebar-scroll")?.addEventListener("scroll", updateSidebarScrollHint, { passive: true });
+document.getElementById("sidebar")?.addEventListener("scroll", updateSidebarScrollHint, { passive: true });
 window.addEventListener("resize", updateSidebarScrollHint);
 
 /* =========================================================

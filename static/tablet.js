@@ -246,6 +246,9 @@
       if (backdrop) backdrop.classList.toggle("show", shouldOpen);
       document.body.classList.toggle("sidebar-open", shouldOpen);
       toggle.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+      if (typeof window.updateSidebarScrollHint === "function") {
+        requestAnimationFrame(() => window.updateSidebarScrollHint());
+      }
     }
 
     function closeSidebar() {

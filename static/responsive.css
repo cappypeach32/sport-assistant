@@ -148,13 +148,35 @@
         box-shadow: 4px 0 28px rgba(0, 0, 0, 0.55);
         pointer-events: auto;
         visibility: visible;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-y: contain;
+        touch-action: pan-y;
+    }
+
+    body.tablet-overlay .sidebar.open .sidebar-scroll {
+        flex: 0 0 auto;
+        overflow: visible;
+        min-height: auto;
     }
 
     body.tablet-overlay .main {
         flex: 1;
         width: 100%;
         min-width: 0;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-y: contain;
+        touch-action: pan-y;
         padding: calc(var(--main-pad) + var(--safe-top)) calc(var(--main-pad) + var(--safe-right)) calc(var(--main-pad) + var(--safe-bottom)) calc(var(--main-pad) + var(--safe-left));
+    }
+
+    body.tablet-overlay.sidebar-open .main {
+        overflow: hidden;
+        touch-action: none;
     }
 
     .sidebar-toggle {
