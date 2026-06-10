@@ -106,18 +106,6 @@ body {
     background: rgba(0,255,153,0.28);
     border-radius: 4px;
 }
-.sidebar-scroll.has-more::after {
-    content: "";
-    position: sticky;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    display: block;
-    height: 36px;
-    margin-top: -36px;
-    pointer-events: none;
-    background: linear-gradient(to bottom, transparent, var(--surface) 85%);
-}
 .sidebar-scroll-hint {
     display: none;
     position: sticky;
@@ -134,19 +122,22 @@ body {
     pointer-events: none;
     touch-action: none;
 }
-.sidebar-scroll.has-more .sidebar-scroll-hint { display: block; }
 
-/* Sticky fade/hint breaks touch scroll on iOS — hide on compact sidebar */
-@media (max-width: 960px) {
+/* Scroll fade hint — desktop sidebar only (breaks iOS touch scroll) */
+@media (min-width: 961px) {
     .sidebar-scroll.has-more::after {
-        display: none !important;
+        content: "";
+        position: sticky;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        display: block;
+        height: 36px;
+        margin-top: -36px;
+        pointer-events: none;
+        background: linear-gradient(to bottom, transparent, var(--surface) 85%);
     }
-    .sidebar-scroll-hint {
-        display: none !important;
-    }
-    .sidebar-scroll {
-        padding-bottom: calc(24px + var(--safe-bottom, 0px));
-    }
+    .sidebar-scroll.has-more .sidebar-scroll-hint { display: block; }
 }
 
 .all-matches-label {
@@ -1641,12 +1632,12 @@ function applyAllSidebarSections() {
 }
 
 function getSidebarScrollBox() {
-    const sidebar = document.getElementById("sidebar");
-    const inner = document.getElementById("sidebar-scroll");
-    if (window.matchMedia("(max-width: 960px)").matches && sidebar?.classList.contains("open")) {
-        return sidebar;
+    if (window.matchMedia("(max-width: 960px)").matches) {
+        const sidebar = document.getElementById("sidebar");
+        if (sidebar?.classList.contains("open")) return sidebar;
+        return null;
     }
-    return inner;
+    return document.getElementById("sidebar-scroll");
 }
 
 function updateSidebarScrollHint() {

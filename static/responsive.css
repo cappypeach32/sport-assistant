@@ -133,9 +133,15 @@
         width: min(88vw, 320px);
         min-width: 0 !important;
         max-width: 320px;
+        height: 100dvh;
+        max-height: 100dvh;
+        box-sizing: border-box;
+        display: block;
+        overflow: hidden;
         padding-top: calc(14px + var(--safe-top));
         padding-bottom: calc(14px + var(--safe-bottom));
         padding-left: calc(14px + var(--safe-left));
+        padding-right: calc(14px + var(--safe-right, 14px));
         transform: translateX(-105%);
         transition: transform 0.28s ease;
         box-shadow: none;
@@ -148,18 +154,27 @@
         box-shadow: 4px 0 28px rgba(0, 0, 0, 0.55);
         pointer-events: auto;
         visibility: visible;
-        overflow-y: auto;
+        overflow-y: scroll;
         overflow-x: hidden;
         -webkit-overflow-scrolling: touch;
         overscroll-behavior-y: contain;
         touch-action: pan-y;
     }
 
-    body.tablet-overlay .sidebar.open .sidebar-scroll {
-        flex: 0 0 auto;
-        overflow: visible;
-        min-height: auto;
-        padding-bottom: calc(28px + var(--safe-bottom));
+    body.tablet-overlay .sidebar .sidebar-header {
+        display: block;
+        flex: none;
+        margin-bottom: 8px;
+    }
+
+    body.tablet-overlay .sidebar .sidebar-scroll {
+        display: block;
+        flex: none !important;
+        min-height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+        margin: 0 -14px;
+        padding: 0 14px calc(32px + var(--safe-bottom)) 14px;
     }
 
     body.tablet-overlay .main {
@@ -402,6 +417,4 @@ body.tablet-overlay .main {
     padding: var(--main-pad);
 }
 
-body.tablet-overlay.sidebar-open {
-    overflow: hidden;
-}
+/* body scroll lock removed — see compact sidebar rules above */
