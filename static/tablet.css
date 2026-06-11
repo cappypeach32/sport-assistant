@@ -8,6 +8,10 @@ body.tablet-mode {
     touch-action: manipulation;
 }
 
+.font-scale-controls {
+    display: none !important;
+}
+
 .tablet-bar {
     display: flex;
     flex-wrap: wrap;

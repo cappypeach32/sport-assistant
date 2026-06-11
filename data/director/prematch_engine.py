@@ -2147,7 +2147,29 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
     # POST-MATCH SUMMARY
     # --------------------------------------------------
 
-    _ft_cache: dict = {}  # fixture_id -> { ts, text }
+    _ft_cache: dict = {}  # fixture_id -> str (GPT summary)
+
+    def get_cached_postmatch(self, fixture_id: int) -> str | None:
+        return self._ft_cache.get(fixture_id)
+
+    def get_instant_postmatch(
+        self,
+        fixture_id:    int,
+        home:          str,
+        away:          str,
+        score_home:    int,
+        score_away:    int,
+        live_stats:    dict,
+        events:        list,
+        prematch_data: dict = None,
+    ) -> str:
+        """Fast rule-based FT summary for immediate UI; GPT refines in background."""
+        cached = self._ft_cache.get(fixture_id)
+        if cached:
+            return cached
+        return self._rule_based_postmatch(
+            home, away, live_stats, events, score_home, score_away, prematch_data,
+        )
 
     def generate_postmatch_summary(
         self,
@@ -2169,7 +2191,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             return self._ft_cache[fixture_id]
 
         if not _gpt_available or _gpt_client is None:
-            return self._rule_based_postmatch(home, away, live_stats, events, score_home, score_away)
+            return self._rule_based_postmatch(home, away, live_stats, events, score_home, score_away, prematch_data)
 
         hs  = live_stats.get("home", {})
         as_ = live_stats.get("away", {})
@@ -2241,7 +2263,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             resp = _gpt_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=900,
+                max_tokens=700,
                 temperature=0.7,
             )
             text = resp.choices[0].message.content.strip()
@@ -2250,30 +2272,113 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             return text
         except Exception as e:
             print(f"[POSTMATCH] GPT error: {e}")
-            return self._rule_based_postmatch(home, away, live_stats, events, score_home, score_away)
+            return self._rule_based_postmatch(home, away, live_stats, events, score_home, score_away, prematch_data)
 
     def _rule_based_postmatch(
         self, home: str, away: str,
         live_stats: dict, events: list,
         score_home: int, score_away: int,
+        prematch_data: dict = None,
     ) -> str:
         hs  = live_stats.get("home", {})
         as_ = live_stats.get("away", {})
-        if   score_home > score_away: winner = home
-        elif score_away > score_home: winner = away
-        else:                         winner = None
+        if   score_home > score_away: winner, loser = home, away
+        elif score_away > score_home: winner, loser = away, home
+        else:                         winner, loser = None, None
+
+        goals_home = [e for e in events if e.get("type") == "Goal" and _evt_team(e) == home]
+        goals_away = [e for e in events if e.get("type") == "Goal" and _evt_team(e) == away]
+
+        def fmt_goals(glist):
+            return ", ".join(f"{_evt_player(g)} {_evt_minute(g)}'" for g in glist) or "—"
+
+        h_shots = hs.get("shots_total", 0) or 0
+        a_shots = as_.get("shots_total", 0) or 0
+        h_xg = hs.get("xg")
+        a_xg = as_.get("xg")
+        h_pos = hs.get("possession", 0) or 0
+        a_pos = as_.get("possession", 0) or 0
+
+        if score_home > score_away:
+            outcome = f"{home} победи с {score_home}:{score_away}."
+        elif score_away > score_home:
+            outcome = f"{away} победи с {score_away}:{score_home}."
+        else:
+            outcome = f"Равенство {score_home}:{score_away}."
+
+        pred_note = ""
+        if prematch_data:
+            pred = prematch_data.get("prediction", {})
+            if pred.get("likely_score"):
+                pred_note = f" Предмачовата прогноза беше {pred['likely_score']}."
 
         lines = [
-            f"## ФИНАЛЕН РЕЗУЛТАТ",
-            f"{home} {score_home}:{score_away} {away}",
-            f"## СТАТИСТИКА",
-            f"{home}: {hs.get('shots_total',0)} удара, xG {hs.get('xg','—')}, {hs.get('possession',0)}% владение",
-            f"{away}: {as_.get('shots_total',0)} удара, xG {as_.get('xg','—')}, {as_.get('possession',0)}% владение",
+            "## КАК ЗАВЪРШИ МАЧЪТ?",
+            f"{home} {score_home}:{score_away} {away}. {outcome}{pred_note}",
+            "",
+            "## СТАТИСТИКА",
+            f"{home}: {h_shots} удара ({hs.get('shots_on_target', 0)} в рамките), xG {h_xg if h_xg is not None else '—'}, {h_pos}% владение, {hs.get('corners', 0)} ъглови",
+            f"{away}: {a_shots} удара ({as_.get('shots_on_target', 0)} в рамките), xG {a_xg if a_xg is not None else '—'}, {a_pos}% владение, {as_.get('corners', 0)} ъглови",
         ]
+
+        if goals_home or goals_away:
+            lines += ["", "## ГОЛОВЕ", f"{home}: {fmt_goals(goals_home)}", f"{away}: {fmt_goals(goals_away)}"]
+
         if winner:
-            lines.append(f"## ПОБЕДИТЕЛ\n{winner} заслужено спечели мача по-добрата ефективност пред вратата.")
+            edge = []
+            try:
+                if h_xg is not None and a_xg is not None and float(h_xg) != float(a_xg):
+                    better_xg = home if float(h_xg) > float(a_xg) else away
+                    edge.append(f"xG ({better_xg})")
+            except (TypeError, ValueError):
+                pass
+            if h_shots != a_shots:
+                edge.append(f"удари ({home if h_shots > a_shots else away})")
+            if h_pos != a_pos:
+                edge.append(f"владение ({home if h_pos > a_pos else away})")
+            edge_txt = f" по {' и '.join(edge)}" if edge else ""
+            lines += ["", "## КОЙ ЗАСЛУЖИ ПОБЕДАТА И ЗАЩО?", f"{winner} контролира ключовите показатели{edge_txt} и заслужено взе трите точки."]
         else:
-            lines.append("## РЕЗУЛТАТ\nРавен резултат след балансиран мач.")
+            lines += ["", "## КОЙ ЗАСЛУЖИ ПОБЕДАТА И ЗАЩО?", "Балансиран мач — и двата отбора имаха моменти за победа."]
+
+        all_goals = sorted(
+            [e for e in events if e.get("type") == "Goal"],
+            key=_evt_minute,
+        )
+        if all_goals:
+            key_g = all_goals[-1] if winner else all_goals[0]
+            lines += [
+                "",
+                "## КЛЮЧОВИЯТ МОМЕНТ НА МАЧА",
+                f"{_evt_minute(key_g)}' — {_evt_player(key_g)} ({_evt_team(key_g)})",
+            ]
+
+        def rough_rating(shots, xg_val, pos, won):
+            score = 5.5
+            score += min(shots, 20) * 0.05
+            score += (pos - 50) * 0.02
+            try:
+                if xg_val is not None:
+                    score += float(xg_val) * 0.4
+            except (TypeError, ValueError):
+                pass
+            if won is True:
+                score += 0.8
+            elif won is False:
+                score -= 0.3
+            return max(4.0, min(9.5, round(score, 1)))
+
+        h_won = True if winner == home else (False if winner == away else None)
+        a_won = True if winner == away else (False if winner == home else None)
+        lines += [
+            "",
+            "## ОЦЕНКИ",
+            f"{home}: {rough_rating(h_shots, h_xg, h_pos, h_won)}/10",
+            f"{away}: {rough_rating(a_shots, a_xg, a_pos, a_won)}/10",
+            "",
+            "## ЗАКЛЮЧЕНИЕ ЗА СТРИЙМА",
+            f"Мачът приключи {score_home}:{score_away}. Пълният AI анализ се доразработва във фонов режим.",
+        ]
         return "\n".join(lines)
 
     # --------------------------------------------------

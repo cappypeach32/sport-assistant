@@ -24,7 +24,7 @@ from data.director.key_moments_detector import KeyMomentsDetector
 from data.director.tactical_engine import TacticalEngine
 
 # Phase 2 — Pre-Match Editorial + Live Narrative
-from data.director.prematch_engine import PreMatchEngine, _is_live, _is_ns
+from data.director.prematch_engine import PreMatchEngine, _is_live, _is_ns, _gpt_available
 
 # Phase 3 — Live Win Probability
 from data.director.win_probability import calculate as calc_win_prob
@@ -91,6 +91,7 @@ latest_prematch:   dict = {}
 latest_narrative:  str  = ""
 latest_halftime:   str  = ""
 latest_postmatch:    str   = ""
+latest_postmatch_gpt_pending: bool = False
 latest_commentary:   list  = []   # list of { minute, title, text }
 _last_ht_status:     str   = ""
 _last_ft_status:     str   = ""
@@ -412,6 +413,7 @@ def build_overlay_response(
     live_narrative: str = "",
     halftime_analysis: str = "",
     postmatch_summary: str = "",
+    postmatch_gpt_pending: bool = False,
 ) -> dict:
 
     if not match:
@@ -646,6 +648,7 @@ def build_overlay_response(
         "table_impact":      table_impact,
         "win_probability":   win_prob,
         "postmatch_summary": postmatch_summary,
+        "postmatch_gpt_pending": postmatch_gpt_pending,
         "commentary_queue":  [],   # filled by loop
 
         # Phase 2 — live narrative (Bulgarian, updated by key moments)
@@ -694,7 +697,7 @@ async def live_stats_loop():
     Polls API-Football every 45s for the active match,
     builds full Phase 1 intelligence, and pushes to all clients.
     """
-    global _last_ft_status, latest_postmatch, _last_ht_status, latest_halftime, latest_narrative, latest_commentary, _last_goal_count, latest_health
+    global _last_ft_status, latest_postmatch, latest_postmatch_gpt_pending, _last_ht_status, latest_halftime, latest_narrative, latest_commentary, _last_goal_count, latest_health
     print("[LOOP] Live stats loop started")
 
     while True:
@@ -715,8 +718,8 @@ async def live_stats_loop():
             sync_match_from_live_fixture(active_match, live_fixture or {})
             match_phase = get_match_phase(active_match)
 
-            # For finished matches, stop re-broadcasting once postmatch is ready
-            if match_phase == "finished" and latest_postmatch:
+            # For finished matches, stop re-broadcasting once postmatch is ready (GPT runs in background task)
+            if match_phase == "finished" and latest_postmatch and not latest_postmatch_gpt_pending:
                 continue
 
             # For prematch — periodic refresh so standings/injuries/referee stay current
@@ -769,7 +772,7 @@ async def live_stats_loop():
                     if narrative:
                         latest_narrative = narrative
 
-            # Post-match summary trigger (FT)
+            # Post-match summary trigger (FT) — instant rule-based, then GPT async
             if match_phase == "finished" and _last_ft_status != "FT":
                 _last_ft_status = "FT"
                 live_stats_snap = latest_intelligence.get("stats", {})
@@ -778,24 +781,36 @@ async def live_stats_loop():
                 score_h_ft = lf_ft.get("home_goals", 0) or 0
                 score_a_ft = lf_ft.get("away_goals", 0) or 0
                 pm_data_snap = latest_prematch.get("data", {}) if latest_prematch.get("available") else {}
-                loop = asyncio.get_running_loop()
-                ft_text = await loop.run_in_executor(
-                    None,
-                    prematch_engine.generate_postmatch_summary,
-                    fixture_id,
-                    active_match.get("home", ""),
-                    active_match.get("away", ""),
-                    score_h_ft,
-                    score_a_ft,
-                    live_stats_snap,
-                    events_snap,
-                    pm_data_snap,
-                )
-                if ft_text:
-                    latest_postmatch = ft_text
-                    print(f"[POSTMATCH] Summary ready for {active_match.get('home')} vs {active_match.get('away')}")
+                cached_pm = prematch_engine.get_cached_postmatch(fixture_id)
+                if cached_pm:
+                    latest_postmatch = cached_pm
+                    latest_postmatch_gpt_pending = False
+                else:
+                    latest_postmatch = prematch_engine.get_instant_postmatch(
+                        fixture_id,
+                        active_match.get("home", ""),
+                        active_match.get("away", ""),
+                        score_h_ft,
+                        score_a_ft,
+                        live_stats_snap,
+                        events_snap,
+                        pm_data_snap,
+                    )
+                    latest_postmatch_gpt_pending = _gpt_available
+                    print(f"[POSTMATCH] Instant summary for {active_match.get('home')} vs {active_match.get('away')}")
+                    if latest_postmatch_gpt_pending:
+                        asyncio.create_task(_load_postmatch_gpt_async(
+                            fixture_id,
+                            active_match,
+                            score_h_ft,
+                            score_a_ft,
+                            live_stats_snap,
+                            events_snap,
+                            pm_data_snap,
+                        ))
             elif match_phase != "finished":
                 _last_ft_status = match_phase
+                latest_postmatch_gpt_pending = False
 
             # Half-time analysis trigger
             if is_halftime(active_match) and _last_ht_status != "HT":
@@ -857,6 +872,7 @@ async def live_stats_loop():
                 live_narrative=latest_narrative,
                 halftime_analysis=latest_halftime,
                 postmatch_summary=latest_postmatch,
+                postmatch_gpt_pending=latest_postmatch_gpt_pending,
             )
             payload["commentary_queue"] = latest_commentary
             latest_health = {
@@ -1117,6 +1133,7 @@ async def refresh_prematch(fixture_id: int):
             live_narrative=latest_narrative,
             halftime_analysis=latest_halftime,
             postmatch_summary=latest_postmatch,
+            postmatch_gpt_pending=latest_postmatch_gpt_pending,
         )
         payload["commentary_queue"] = latest_commentary
         await broadcast(payload)
@@ -1143,7 +1160,7 @@ async def select_match(request: Request):
     data = await request.json()
     match = data.get("match")
 
-    global latest_halftime, latest_postmatch, latest_commentary, _last_goal_count, _last_ht_status, _last_ft_status
+    global latest_halftime, latest_postmatch, latest_postmatch_gpt_pending, latest_commentary, _last_goal_count, _last_ht_status, _last_ft_status
 
     old_fid = active_match.get("raw_id") if active_match else None
     new_fid = match.get("raw_id") if match else None
@@ -1156,6 +1173,7 @@ async def select_match(request: Request):
         latest_narrative    = ""
         latest_halftime     = ""
         latest_postmatch    = ""
+        latest_postmatch_gpt_pending = False
         latest_commentary   = []
         _last_goal_count    = 0
         _last_ht_status     = ""
@@ -1184,6 +1202,7 @@ async def select_match(request: Request):
                 live_narrative=latest_narrative,
                 halftime_analysis=latest_halftime,
                 postmatch_summary=latest_postmatch,
+                postmatch_gpt_pending=latest_postmatch_gpt_pending,
             )
             payload["commentary_queue"] = latest_commentary
             await broadcast(payload)
@@ -1196,6 +1215,7 @@ async def select_match(request: Request):
             loading_payload = build_overlay_response(active_match, prematch={"available": False})
             loading_payload["halftime_analysis"] = ""
             loading_payload["postmatch_summary"] = ""
+            loading_payload["postmatch_gpt_pending"] = False
             loading_payload["commentary_queue"]  = []
             await broadcast(loading_payload)
 
@@ -1233,6 +1253,7 @@ async def _load_prematch_async(fixture_id: int, match: dict):
                 live_narrative=latest_narrative,
                 halftime_analysis=latest_halftime,
                 postmatch_summary=latest_postmatch,
+                postmatch_gpt_pending=latest_postmatch_gpt_pending,
             )
             payload["commentary_queue"] = latest_commentary
             await broadcast(payload)
@@ -1254,6 +1275,7 @@ async def _load_prematch_async(fixture_id: int, match: dict):
             live_narrative=latest_narrative,
             halftime_analysis=latest_halftime,
             postmatch_summary=latest_postmatch,
+            postmatch_gpt_pending=latest_postmatch_gpt_pending,
         )
         payload["commentary_queue"] = latest_commentary
         await broadcast(payload)
@@ -1278,6 +1300,7 @@ async def _load_prematch_async(fixture_id: int, match: dict):
                 live_narrative=latest_narrative,
                 halftime_analysis=latest_halftime,
                 postmatch_summary=latest_postmatch,
+                postmatch_gpt_pending=latest_postmatch_gpt_pending,
             )
             payload["commentary_queue"] = latest_commentary
             await broadcast(payload)
@@ -1285,6 +1308,61 @@ async def _load_prematch_async(fixture_id: int, match: dict):
     except Exception as e:
         import traceback
         print(f"[BG] ERROR in prematch task: {e}")
+        traceback.print_exc()
+
+
+async def _load_postmatch_gpt_async(
+    fixture_id: int,
+    match: dict,
+    score_h: int,
+    score_a: int,
+    live_stats: dict,
+    events: list,
+    prematch_data: dict,
+):
+    """Phase 2: GPT post-match summary in background; broadcast when ready."""
+    global latest_postmatch, latest_postmatch_gpt_pending
+
+    if active_match and active_match.get("raw_id") != fixture_id:
+        return
+
+    print(f"[BG] Postmatch GPT task started for fixture {fixture_id}")
+    try:
+        loop = asyncio.get_running_loop()
+        ft_text = await loop.run_in_executor(
+            None,
+            prematch_engine.generate_postmatch_summary,
+            fixture_id,
+            match.get("home", ""),
+            match.get("away", ""),
+            score_h,
+            score_a,
+            live_stats,
+            events,
+            prematch_data,
+        )
+        if active_match and active_match.get("raw_id") != fixture_id:
+            return
+
+        latest_postmatch_gpt_pending = False
+        if ft_text:
+            latest_postmatch = ft_text
+            print(f"[BG] Postmatch GPT complete for fixture {fixture_id} — broadcasting update")
+            payload = build_overlay_response(
+                match,
+                intelligence=latest_intelligence or {},
+                prematch=latest_prematch,
+                live_narrative=latest_narrative,
+                halftime_analysis=latest_halftime,
+                postmatch_summary=latest_postmatch,
+                postmatch_gpt_pending=False,
+            )
+            payload["commentary_queue"] = latest_commentary
+            await broadcast(payload)
+    except Exception as e:
+        latest_postmatch_gpt_pending = False
+        import traceback
+        print(f"[BG] ERROR in postmatch GPT task: {e}")
         traceback.print_exc()
 
 
@@ -1308,6 +1386,7 @@ async def ws_endpoint(websocket: WebSocket):
                 live_narrative=latest_narrative,
                 halftime_analysis=latest_halftime,
                 postmatch_summary=latest_postmatch,
+                postmatch_gpt_pending=latest_postmatch_gpt_pending,
             )
             init_payload["commentary_queue"] = latest_commentary
             await websocket.send_json(init_payload)
