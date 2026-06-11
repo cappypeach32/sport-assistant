@@ -111,6 +111,12 @@ latest_health:       dict  = {
 # =====================================================
 
 async def broadcast(payload: dict):
+    global latest_postmatch, latest_postmatch_gpt_pending
+    if payload.get("phase") == "finished" and payload.get("postmatch_summary"):
+        latest_postmatch = payload["postmatch_summary"]
+        if "postmatch_gpt_pending" in payload:
+            latest_postmatch_gpt_pending = bool(payload["postmatch_gpt_pending"])
+
     dead = []
     for ws in clients:
         try:
@@ -412,7 +418,18 @@ async def _ensure_postmatch(match: dict, *, spawn_gpt: bool = True) -> None:
     global latest_postmatch, latest_postmatch_gpt_pending, latest_intelligence, _postmatch_gpt_spawned
 
     fixture_id = match.get("raw_id")
-    if not fixture_id or get_match_phase(match) != "finished":
+    if not fixture_id:
+        return
+
+    loop = asyncio.get_running_loop()
+
+    try:
+        lf = await loop.run_in_executor(None, stats_collector.get_live_fixture, fixture_id)
+        sync_match_from_live_fixture(match, lf or {})
+    except Exception as e:
+        print(f"[POSTMATCH] fixture sync error: {e}")
+
+    if get_match_phase(match) != "finished":
         return
 
     cached = prematch_engine.get_cached_postmatch(fixture_id)
@@ -421,22 +438,27 @@ async def _ensure_postmatch(match: dict, *, spawn_gpt: bool = True) -> None:
         latest_postmatch_gpt_pending = False
         return
 
-    loop = asyncio.get_running_loop()
-
     live_stats = latest_intelligence.get("stats", {})
     events = stats_collector._events_cache.get(fixture_id, {}).get("data", [])
     if not events:
-        events = await loop.run_in_executor(None, stats_collector.get_events, fixture_id)
+        try:
+            events = await loop.run_in_executor(None, stats_collector.get_events, fixture_id)
+        except Exception as e:
+            print(f"[POSTMATCH] events fetch error: {e}")
+            events = []
     if not live_stats:
-        intel = await loop.run_in_executor(None, build_live_intelligence, match, 90)
-        if intel.get("available"):
-            latest_intelligence.update(intel)
-            live_stats = intel.get("stats", {})
+        try:
+            intel = await loop.run_in_executor(None, build_live_intelligence, match, 90)
+            if intel.get("available"):
+                latest_intelligence.update(intel)
+                live_stats = intel.get("stats", {})
+        except Exception as e:
+            print(f"[POSTMATCH] intelligence fetch error: {e}")
 
     lf = await loop.run_in_executor(None, stats_collector.get_live_fixture, fixture_id)
     sync_match_from_live_fixture(match, lf or {})
-    score_h = (lf or {}).get("home_goals", 0) or 0
-    score_a = (lf or {}).get("away_goals", 0) or 0
+    score_h = (lf or {}).get("home_goals", match.get("home_goals", 0)) or 0
+    score_a = (lf or {}).get("away_goals", match.get("away_goals", 0)) or 0
     pm_data = latest_prematch.get("data", {}) if latest_prematch.get("available") else {}
 
     if not latest_postmatch:
@@ -483,15 +505,17 @@ def build_overlay_response(
     home = match.get("home", "Home")
     away = match.get("away", "Away")
     fixture_id = match.get("raw_id")
+    live_fixture: dict = {}
+
+    if fixture_id:
+        live_fixture = stats_collector.get_live_fixture(fixture_id) or {}
+        sync_match_from_live_fixture(match, live_fixture)
+
     match_phase = get_match_phase(match)
 
     # --- Phase 1 intelligence (API-Football only) ---
     intel = intelligence or {}
     real_available = intel.get("available", False)
-    live_fixture: dict = {}
-
-    if fixture_id:
-        live_fixture = stats_collector.get_live_fixture(fixture_id) or {}
 
     minute = int(live_fixture.get("minute") or 0)
     if minute <= 0 and match_phase != "live":
@@ -602,9 +626,20 @@ def build_overlay_response(
         "home": stats.get("home", {}) if real_available else {},
         "away": stats.get("away", {}) if real_available else {},
     }
+    score_h = int(live_hg if live_hg is not None else match.get("home_goals") or 0)
+    score_a = int(live_ag if live_ag is not None else match.get("away_goals") or 0)
+
+    if match_phase == "finished" and not postmatch_summary and fixture_id:
+        events_for_pm = match_events or stats_collector.get_events(fixture_id)
+        postmatch_summary = (
+            prematch_engine.get_cached_postmatch(fixture_id)
+            or prematch_engine.get_instant_postmatch(
+                fixture_id, home, away, score_h, score_a,
+                stats_for_pkg, events_for_pm, pm_data,
+            )
+        )
+
     broadcast_package: dict = {"active": False}
-    score_h = int(live_hg or 0)
-    score_a = int(live_ag or 0)
     if _should_show_ht_package(match, match_phase):
         broadcast_package = build_halftime_package(
             home, away, score_h, score_a, stats_for_pkg, halftime_analysis

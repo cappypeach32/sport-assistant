@@ -1960,7 +1960,12 @@ function selectMatch(id) {
         _lastBpKey = "";
         TabletMode.resetAlertsForMatch();
         const postC = document.getElementById("postmatch-sections");
-        if (postC) { postC.innerHTML = ""; delete postC.dataset.rendered; }
+        if (postC) {
+            postC.innerHTML = "";
+            delete postC.dataset.rendered;
+            delete postC.dataset.loading;
+            delete postC.dataset.renderKey;
+        }
         const htC = document.getElementById("halftime-sections");
         if (htC) { htC.innerHTML = ""; delete htC.dataset.rendered; }
     }
@@ -1986,7 +1991,10 @@ function selectMatch(id) {
 
     startPrematchPoll(id);
 
-    if (sameMatch && cachedPrematch?.gpt_narrative) {
+    const isFinished = (match.status_short || "").toUpperCase() === "FT"
+        || (match.status || "").toLowerCase().includes("finished");
+
+    if (sameMatch && cachedPrematch?.gpt_narrative && !isFinished) {
         return;
     }
 
@@ -2858,6 +2866,7 @@ function renderWinProbability(data) {
 function renderPostmatch(data) {
     const text  = data.postmatch_summary || "";
     const pending = !!data.postmatch_gpt_pending;
+    const pkg = data.broadcast_package || {};
     const card  = document.getElementById("card-postmatch");
     const phase = data.phase || "";
 
@@ -2870,7 +2879,9 @@ function renderPostmatch(data) {
     const container = document.getElementById("postmatch-sections");
     if (!container) return;
 
-    if (!text) {
+    const displayText = text || (pkg.phase === "fulltime" && pkg.wrap_up) || "";
+
+    if (!displayText) {
         if (!container.dataset.loading) {
             container.innerHTML = `
             <div style="padding:14px 16px;background:var(--surface2);border-radius:10px;border-left:3px solid var(--green)">
@@ -2887,15 +2898,19 @@ function renderPostmatch(data) {
         return;
     }
 
-    const renderKey = text.length + "|" + text.slice(0, 64) + "|" + (pending ? "p" : "d");
+    const renderKey = displayText.length + "|" + displayText.slice(0, 64) + "|" + (pending ? "p" : "d");
     if (container.dataset.renderKey === renderKey) return;
 
     delete container.dataset.loading;
-    let html = renderBroadcastGuide(text, data.match?.home || "", data.match?.away || "");
-    if (pending) {
+    let html = renderBroadcastGuide(displayText, data.match?.home || "", data.match?.away || "");
+    if (pending && text) {
         html = `<div style="margin-bottom:10px;padding:8px 12px;background:rgba(34,197,94,.12);border-radius:8px;font-size:12px;color:var(--green);display:flex;align-items:center;gap:8px">
             <div class="loading-spinner" style="width:14px;height:14px;border-width:2px;border-top-color:var(--green)"></div>
             AI доразработва пълния анализ…
+        </div>` + html;
+    } else if (!text && pkg.wrap_up) {
+        html = `<div style="margin-bottom:10px;padding:8px 12px;background:rgba(234,179,8,.1);border-radius:8px;font-size:12px;color:#eab308">
+            Кратко резюме — пълният анализ се зарежда…
         </div>` + html;
     }
     container.innerHTML = html;
