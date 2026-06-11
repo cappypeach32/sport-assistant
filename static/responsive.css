@@ -136,12 +136,10 @@
         height: 100dvh;
         max-height: 100dvh;
         box-sizing: border-box;
-        display: block;
+        display: flex;
+        flex-direction: column;
         overflow: hidden;
-        padding-top: calc(14px + var(--safe-top));
-        padding-bottom: calc(14px + var(--safe-bottom));
-        padding-left: calc(14px + var(--safe-left));
-        padding-right: calc(14px + var(--safe-right, 14px));
+        padding: 0;
         transform: translateX(-105%);
         transition: transform 0.28s ease;
         box-shadow: none;
@@ -154,11 +152,17 @@
         box-shadow: 4px 0 28px rgba(0, 0, 0, 0.55);
         pointer-events: auto;
         visibility: visible;
-        overflow-y: scroll;
+    }
+
+    body.tablet-overlay .sidebar .sidebar-inner {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
         overflow-x: hidden;
         -webkit-overflow-scrolling: touch;
         overscroll-behavior-y: contain;
         touch-action: pan-y;
+        padding: calc(14px + var(--safe-top)) calc(14px + var(--safe-right, 14px)) calc(14px + var(--safe-bottom)) calc(14px + var(--safe-left));
     }
 
     body.tablet-overlay .sidebar .health-bar {

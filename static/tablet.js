@@ -250,7 +250,8 @@
         requestAnimationFrame(() => window.updateSidebarScrollHint());
       }
       if (shouldOpen && isDrawer()) {
-        sidebar.scrollTop = 0;
+        const pane = document.getElementById("sidebar-inner");
+        if (pane) pane.scrollTop = 0;
       }
     }
 

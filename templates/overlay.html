@@ -67,6 +67,14 @@ body {
     margin-bottom: 8px;
 }
 
+.sidebar-inner {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
 .sidebar-tools-row {
     display: flex;
     gap: 6px;
@@ -1206,6 +1214,8 @@ body {
      ========================================================= -->
 <div class="sidebar" id="sidebar">
 
+    <div class="sidebar-inner" id="sidebar-inner">
+
     <div class="sidebar-header">
         <div class="sidebar-title">Мачове</div>
 
@@ -1319,6 +1329,8 @@ body {
         <div class="match-list" id="matches"></div>
         <div class="sidebar-scroll-hint">↓ още мачове</div>
     </div>
+
+    </div><!-- /.sidebar-inner -->
 
 </div>
 
@@ -1642,9 +1654,7 @@ function applyAllSidebarSections() {
 
 function getSidebarScrollBox() {
     if (window.matchMedia("(max-width: 960px)").matches) {
-        const sidebar = document.getElementById("sidebar");
-        if (sidebar?.classList.contains("open")) return sidebar;
-        return null;
+        return document.getElementById("sidebar-inner");
     }
     return document.getElementById("sidebar-scroll");
 }
@@ -3572,7 +3582,7 @@ applyAllSidebarSections();
 window.matchMedia("(max-width: 960px)").addEventListener("change", applyAllSidebarSections);
 
 document.getElementById("sidebar-scroll")?.addEventListener("scroll", updateSidebarScrollHint, { passive: true });
-document.getElementById("sidebar")?.addEventListener("scroll", updateSidebarScrollHint, { passive: true });
+document.getElementById("sidebar-inner")?.addEventListener("scroll", updateSidebarScrollHint, { passive: true });
 window.addEventListener("resize", updateSidebarScrollHint);
 
 /* =========================================================
