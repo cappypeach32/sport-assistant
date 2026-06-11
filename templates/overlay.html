@@ -68,10 +68,11 @@ body {
 }
 
 .sidebar-inner {
-    flex: 1;
+    flex: 1 1 0;
     min-height: 0;
+    height: 0;
     display: block;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
@@ -211,12 +212,6 @@ body {
 @media (min-width: 1201px) {
     .sidebar-section-tools .sidebar-section-head { display: none; }
     .sidebar-section-tools .sidebar-section-body {
-        display: block !important;
-        padding-top: 0;
-    }
-    .sidebar-section-preflight .sidebar-section-head { display: none; }
-    .sidebar-section-preflight .sidebar-section-body,
-    .sidebar-section-preflight.collapsed .sidebar-section-body {
         display: block !important;
         padding-top: 0;
     }
@@ -1097,7 +1092,18 @@ body {
 .preflight-checklist.all-ok {
     border-color: var(--green);
     background: rgba(0,255,153,0.08);
-    box-shadow: 0 0 12px rgba(0,255,153,0.12);
+}
+
+@media (max-width: 1200px) {
+    .preflight-checklist.all-ok {
+        box-shadow: none;
+    }
+}
+
+@media (min-width: 1201px) {
+    .preflight-checklist.all-ok {
+        box-shadow: 0 0 12px rgba(0,255,153,0.12);
+    }
 }
 .preflight-item {
     display: flex;
@@ -1615,7 +1621,7 @@ function switchTab(tab) {
 const SIDEBAR_SECTIONS = {
     featured:  { el: "section-featured",  key: "featuredCollapsed",         mobileDefault: true,  desktopDefault: false },
     agenda:    { el: "section-agenda",    key: "sidebarAgendaCollapsed",    mobileDefault: true,  desktopDefault: false },
-    preflight: { el: "section-preflight", key: "sidebarPreflightCollapsed", mobileDefault: true,  desktopDefault: false },
+    preflight: { el: "section-preflight", key: "sidebarPreflightCollapsed", mobileDefault: true,  desktopDefault: true },
     tools:     { el: "section-tools",     key: "sidebarToolsCollapsed",     mobileDefault: true,  desktopDefault: false },
 };
 
@@ -1638,6 +1644,7 @@ function toggleSidebarSection(id) {
     localStorage.setItem(cfg.key, getSidebarSectionCollapsed(id) ? "0" : "1");
     applySidebarSection(id);
     updateSidebarScrollHint();
+    refreshSidebarScroll();
 }
 
 function applySidebarSection(id) {
@@ -1653,6 +1660,21 @@ function applySidebarSection(id) {
 function applyAllSidebarSections() {
     Object.keys(SIDEBAR_SECTIONS).forEach(applySidebarSection);
 }
+
+function refreshSidebarScroll() {
+    const pane = document.getElementById("sidebar-inner");
+    if (!pane) return;
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            const top = pane.scrollTop;
+            pane.style.overflowY = "scroll";
+            pane.style.webkitOverflowScrolling = "touch";
+            pane.scrollTop = top;
+        });
+    });
+}
+
+window.refreshSidebarScroll = refreshSidebarScroll;
 
 function getSidebarScrollBox() {
     return document.getElementById("sidebar-inner");
@@ -2169,9 +2191,11 @@ function renderPreflightChecklist(data) {
 
     if (!shouldShowPreflight(data)) {
         section.style.display = "none";
+        refreshSidebarScroll();
         return;
     }
 
+    const wasHidden = section.style.display === "none";
     section.style.display = "block";
     const items = [
         { ok: !!(data?.match?.raw_id || state.selectedId), label: "Мач избран" },
@@ -2194,8 +2218,13 @@ function renderPreflightChecklist(data) {
             <span class="pf-icon">${i.ok ? "✓" : "○"}</span>
             <span>${i.label}</span>
         </div>`).join("");
+
+    if (wasHidden && isCompactSidebar() && localStorage.getItem("sidebarPreflightCollapsed") === null) {
+        localStorage.setItem("sidebarPreflightCollapsed", "1");
+    }
     applySidebarSection("preflight");
     updateSidebarScrollHint();
+    refreshSidebarScroll();
 }
 
 /* =========================================================
