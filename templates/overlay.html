@@ -185,6 +185,7 @@ body {
 }
 .sidebar-section-featured .sidebar-section-label { color: #eab308; }
 .sidebar-section-agenda .sidebar-section-label { color: var(--green); }
+.sidebar-section-preflight.preflight-all-ok .sidebar-section-label { color: var(--green); }
 .sidebar-section-chevron {
     font-size: 10px;
     color: var(--muted);
@@ -195,10 +196,17 @@ body {
 .sidebar-section.collapsed .sidebar-section-body { display: none; }
 .sidebar-section-body { padding-top: 6px; }
 .sidebar-section-tools { margin-top: 8px; }
+.sidebar-section-preflight { margin-top: 8px; }
 
 @media (min-width: 961px) {
     .sidebar-section-tools .sidebar-section-head { display: none; }
     .sidebar-section-tools .sidebar-section-body {
+        display: block !important;
+        padding-top: 0;
+    }
+    .sidebar-section-preflight .sidebar-section-head { display: none; }
+    .sidebar-section-preflight .sidebar-section-body,
+    .sidebar-section-preflight.collapsed .sidebar-section-body {
         display: block !important;
         padding-top: 0;
     }
@@ -1068,9 +1076,9 @@ body {
 
 /* ===== PRE-FLIGHT CHECKLIST ===== */
 .preflight-checklist {
-    display: none;
+    display: block;
     padding: 10px 12px;
-    margin-bottom: 10px;
+    margin-bottom: 0;
     background: rgba(0,255,153,0.04);
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -1080,14 +1088,6 @@ body {
     border-color: var(--green);
     background: rgba(0,255,153,0.08);
     box-shadow: 0 0 12px rgba(0,255,153,0.12);
-}
-.preflight-title {
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--muted);
-    margin-bottom: 8px;
 }
 .preflight-item {
     display: flex;
@@ -1243,14 +1243,6 @@ body {
                oninput="filterMatches()"
                style="margin-top:6px"/>
 
-        <div class="sidebar-section sidebar-section-tools" id="section-tools">
-            <button type="button" class="sidebar-section-head" id="section-tools-head"
-                    onclick="toggleSidebarSection('tools')" aria-expanded="false" aria-controls="section-tools-body">
-                <span class="sidebar-section-label">⚙️ Ефир и настройки</span>
-                <span class="sidebar-section-chevron" aria-hidden="true">▼</span>
-            </button>
-            <div class="sidebar-section-body" id="section-tools-body">
-
         <div class="health-bar" id="health-bar">
             <div class="health-item">
                 <span class="health-dot health-warn" id="health-ws-dot"></span>
@@ -1265,10 +1257,26 @@ body {
             </div>
         </div>
 
-        <div class="preflight-checklist" id="preflight-checklist">
-            <div class="preflight-title">Чеклист преди ефир</div>
-            <div id="preflight-items"></div>
+        <div class="sidebar-section sidebar-section-preflight collapsed" id="section-preflight" style="display:none">
+            <button type="button" class="sidebar-section-head" id="section-preflight-head"
+                    onclick="toggleSidebarSection('preflight')" aria-expanded="false" aria-controls="section-preflight-body">
+                <span class="sidebar-section-label" id="preflight-header-label">📋 Чеклист преди ефир</span>
+                <span class="sidebar-section-chevron" aria-hidden="true">▼</span>
+            </button>
+            <div class="sidebar-section-body" id="section-preflight-body">
+                <div class="preflight-checklist" id="preflight-checklist">
+                    <div id="preflight-items"></div>
+                </div>
+            </div>
         </div>
+
+        <div class="sidebar-section sidebar-section-tools collapsed" id="section-tools">
+            <button type="button" class="sidebar-section-head" id="section-tools-head"
+                    onclick="toggleSidebarSection('tools')" aria-expanded="false" aria-controls="section-tools-body">
+                <span class="sidebar-section-label">⚙️ Ефир и настройки</span>
+                <span class="sidebar-section-chevron" aria-hidden="true">▼</span>
+            </button>
+            <div class="sidebar-section-body" id="section-tools-body">
 
         <div class="tablet-bar">
             <button type="button" class="tablet-btn" onclick="TabletMode.changeFont(-0.1)" title="По-малък шрифт">A−</button>
@@ -1591,9 +1599,10 @@ function switchTab(tab) {
 }
 
 const SIDEBAR_SECTIONS = {
-    featured: { el: "section-featured", key: "featuredCollapsed", mobileDefault: true, desktopDefault: false },
-    agenda:   { el: "section-agenda",   key: "sidebarAgendaCollapsed", mobileDefault: true, desktopDefault: false },
-    tools:    { el: "section-tools",    key: "sidebarToolsCollapsed", mobileDefault: true, desktopDefault: false },
+    featured:  { el: "section-featured",  key: "featuredCollapsed",         mobileDefault: true,  desktopDefault: false },
+    agenda:    { el: "section-agenda",    key: "sidebarAgendaCollapsed",    mobileDefault: true,  desktopDefault: false },
+    preflight: { el: "section-preflight", key: "sidebarPreflightCollapsed", mobileDefault: true,  desktopDefault: false },
+    tools:     { el: "section-tools",     key: "sidebarToolsCollapsed",     mobileDefault: true,  desktopDefault: false },
 };
 
 function isCompactSidebar() {
@@ -2145,16 +2154,18 @@ function shouldShowPreflight(data) {
 }
 
 function renderPreflightChecklist(data) {
+    const section = document.getElementById("section-preflight");
     const box = document.getElementById("preflight-checklist");
     const itemsEl = document.getElementById("preflight-items");
-    if (!box || !itemsEl) return;
+    const headerLabel = document.getElementById("preflight-header-label");
+    if (!section || !box || !itemsEl) return;
 
     if (!shouldShowPreflight(data)) {
-        box.style.display = "none";
+        section.style.display = "none";
         return;
     }
 
-    box.style.display = "block";
+    section.style.display = "block";
     const items = [
         { ok: !!(data?.match?.raw_id || state.selectedId), label: "Мач избран" },
         { ok: !!(data?.prematch?.gpt_narrative), label: "GPT guide готов" },
@@ -2163,12 +2174,21 @@ function renderPreflightChecklist(data) {
         { ok: data?.meta?.health?.api_ok === true, label: "API OK" },
     ];
     const allOk = items.every(i => i.ok);
+    const done = items.filter(i => i.ok).length;
     box.classList.toggle("all-ok", allOk);
+    section.classList.toggle("preflight-all-ok", allOk);
+    if (headerLabel) {
+        headerLabel.textContent = allOk
+            ? "📋 Чеклист · готов ✓"
+            : `📋 Чеклист преди ефир (${done}/${items.length})`;
+    }
     itemsEl.innerHTML = items.map(i => `
         <div class="preflight-item ${i.ok ? "ok" : "pending"}">
             <span class="pf-icon">${i.ok ? "✓" : "○"}</span>
             <span>${i.label}</span>
         </div>`).join("");
+    applySidebarSection("preflight");
+    updateSidebarScrollHint();
 }
 
 /* =========================================================

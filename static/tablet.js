@@ -249,6 +249,9 @@
       if (typeof window.updateSidebarScrollHint === "function") {
         requestAnimationFrame(() => window.updateSidebarScrollHint());
       }
+      if (shouldOpen && isDrawer()) {
+        sidebar.scrollTop = 0;
+      }
     }
 
     function closeSidebar() {
