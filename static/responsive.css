@@ -136,8 +136,7 @@
         height: 100dvh;
         max-height: 100dvh;
         box-sizing: border-box;
-        display: flex;
-        flex-direction: column;
+        display: block;
         overflow: hidden;
         padding: 0;
         transform: translateX(-105%);
@@ -154,39 +153,28 @@
         visibility: visible;
     }
 
+    /* Single scroll pane — absolute fill (reliable on iOS Safari) */
     body.tablet-overlay .sidebar .sidebar-inner {
-        flex: 1 1 0;
-        min-height: 0;
-        height: 0;
-        display: block;
-        overflow-y: scroll;
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
         overflow-x: hidden;
+        overflow-y: scroll;
         -webkit-overflow-scrolling: touch;
         overscroll-behavior-y: contain;
         touch-action: pan-y;
-        padding: calc(14px + var(--safe-top)) calc(14px + var(--safe-right, 14px)) calc(14px + var(--safe-bottom)) calc(14px + var(--safe-left));
+        padding: calc(14px + var(--safe-top)) calc(14px + var(--safe-right, 14px)) calc(24px + var(--safe-bottom)) calc(14px + var(--safe-left));
     }
 
+    body.tablet-overlay .sidebar .sidebar-header,
     body.tablet-overlay .sidebar .sidebar-scroll {
         display: block;
         overflow: visible !important;
-        flex: none !important;
-        min-height: auto !important;
+        height: auto !important;
         max-height: none !important;
-        margin: 0 -14px;
-        padding: 0 14px calc(32px + var(--safe-bottom)) 14px;
-    }
-
-    body.tablet-overlay .sidebar .health-bar {
-        margin-bottom: 8px;
-        padding: 6px 10px;
-        font-size: 10px;
-    }
-
-    body.tablet-overlay .sidebar .sidebar-header {
-        display: block;
-        flex: none;
-        margin-bottom: 8px;
+        flex: none !important;
     }
 
     body.tablet-overlay .main {
@@ -422,10 +410,16 @@ body.tablet-commentator {
         transform: none !important;
         pointer-events: auto;
         visibility: visible;
+        display: flex;
+        flex-direction: column;
     }
 
     body.tablet-overlay .sidebar .sidebar-inner {
-        padding: 14px;
+        position: relative;
+        flex: 1 1 0;
+        min-height: 0;
+        height: 0;
+        overflow-y: auto;
     }
 }
 

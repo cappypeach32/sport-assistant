@@ -228,6 +228,51 @@
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
 
+  function initSidebarTouchScroll() {
+    const pane = document.getElementById("sidebar-inner");
+    const sidebar = document.getElementById("sidebar");
+    if (!pane || !sidebar) return;
+
+    let active = false;
+    let startY = 0;
+    let startScroll = 0;
+
+    pane.addEventListener(
+      "touchstart",
+      (e) => {
+        if (!window.matchMedia("(max-width: 1200px)").matches) return;
+        if (!sidebar.classList.contains("open")) return;
+        if (e.touches.length !== 1) return;
+        active = true;
+        startY = e.touches[0].clientY;
+        startScroll = pane.scrollTop;
+      },
+      { passive: true }
+    );
+
+    pane.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!active || e.touches.length !== 1) return;
+        if (!window.matchMedia("(max-width: 1200px)").matches) return;
+        if (!sidebar.classList.contains("open")) return;
+        const dy = startY - e.touches[0].clientY;
+        const max = pane.scrollHeight - pane.clientHeight;
+        const next = Math.max(0, Math.min(max, startScroll + dy));
+        if (pane.scrollTop !== next) pane.scrollTop = next;
+      },
+      { passive: true }
+    );
+
+    pane.addEventListener("touchend", () => {
+      active = false;
+    }, { passive: true });
+
+    pane.addEventListener("touchcancel", () => {
+      active = false;
+    }, { passive: true });
+  }
+
   function initResponsiveSidebar() {
     const sidebar = document.getElementById("sidebar");
     const toggle = document.getElementById("sidebar-toggle");
@@ -303,6 +348,7 @@
     updateAlertsBtn();
     updateWakeBtn();
     initResponsiveSidebar();
+    initSidebarTouchScroll();
 
     if (wakeOn) acquireWakeLock();
 
