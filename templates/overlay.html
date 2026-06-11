@@ -2164,6 +2164,11 @@ function renderBroadcastPackage(data) {
     if (!card) return;
 
     const pkg = data.broadcast_package || {};
+    const loadEl = document.getElementById("bp-loading");
+    const bulletsEl = document.getElementById("bp-bullets");
+    const wrapEl = document.getElementById("bp-wrap");
+    const statsEl = document.getElementById("bp-stats");
+
     if (!pkg.active) {
         card.style.display = "none";
         _lastBpKey = "";
@@ -2191,16 +2196,11 @@ function renderBroadcastPackage(data) {
     setText("bp-title", pkg.title || "Ефирен пакет");
     setText("bp-score", pkg.score_label || "");
 
-    const statsEl = document.getElementById("bp-stats");
     if (statsEl) {
         statsEl.innerHTML = (pkg.stats_lines || []).map(l =>
             `<div class="bp-stat-line">${l}</div>`
         ).join("");
     }
-
-    const bulletsEl = document.getElementById("bp-bullets");
-    const wrapEl = document.getElementById("bp-wrap");
-    const loadEl = document.getElementById("bp-loading");
 
     if (pkg.phase === "halftime") {
         if (bulletsEl) {

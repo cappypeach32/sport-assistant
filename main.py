@@ -508,7 +508,20 @@ def build_overlay_response(
     live_fixture: dict = {}
 
     if fixture_id:
-        live_fixture = stats_collector.get_live_fixture(fixture_id) or {}
+        # Prefer cache to avoid blocking async handlers on every broadcast
+        cache_entry = stats_collector._stats_cache.get(f"fixture_{fixture_id}")
+        if cache_entry and (time.time() - cache_entry["ts"]) < 45:
+            live_fixture = cache_entry["data"]
+        elif match.get("home_goals") is not None and is_finished_match(match):
+            live_fixture = {
+                "home_goals":  match.get("home_goals"),
+                "away_goals":  match.get("away_goals"),
+                "minute":      90,
+                "status_short": match.get("status_short", "FT"),
+                "status_long":  match.get("status", "Match Finished"),
+            }
+        else:
+            live_fixture = stats_collector.get_live_fixture(fixture_id) or {}
         sync_match_from_live_fixture(match, live_fixture)
 
     match_phase = get_match_phase(match)
@@ -630,7 +643,10 @@ def build_overlay_response(
     score_a = int(live_ag if live_ag is not None else match.get("away_goals") or 0)
 
     if match_phase == "finished" and not postmatch_summary and fixture_id:
-        events_for_pm = match_events or stats_collector.get_events(fixture_id)
+        events_for_pm = match_events
+        if not events_for_pm:
+            cached_ev = stats_collector._events_cache.get(fixture_id, {})
+            events_for_pm = cached_ev.get("data", []) if cached_ev else []
         postmatch_summary = (
             prematch_engine.get_cached_postmatch(fixture_id)
             or prematch_engine.get_instant_postmatch(
