@@ -103,6 +103,39 @@ body {
     padding: 0.35rem 0;
     border-bottom: 1px solid var(--border);
 }
+.bp-stats-table {
+    display: grid;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 0.75rem;
+}
+.bp-stats-head, .bp-stats-row {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr 1fr;
+    gap: 8px;
+    padding: 0.55rem 0.75rem;
+    align-items: center;
+}
+.bp-stats-head {
+    font-size: 0.72rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid var(--border);
+}
+.bp-stats-head span:nth-child(n+2),
+.bp-stats-row span:nth-child(n+2) { text-align: center; }
+.bp-stats-row {
+    font-size: clamp(1rem, 2.5vw, 1.15rem);
+    border-bottom: 1px solid var(--border);
+}
+.bp-stats-row:last-child { border-bottom: none; }
+.bp-stats-row span:first-child { color: var(--muted); font-size: 0.9rem; }
+.bp-stats-row span:nth-child(2) { color: var(--green); font-weight: 700; }
+.bp-stats-row span:nth-child(3) { color: var(--blue); font-weight: 700; }
 .bp-bullet-lg {
     font-size: clamp(1.15rem, 3vw, 1.45rem);
     line-height: 1.5;
@@ -199,6 +232,25 @@ function extractGuideSections(narrative) {
     });
 }
 
+function renderBroadcastStatsTableLg(table) {
+    if (!table?.available || !(table.rows || []).length) return "";
+    const rows = table.rows.map(r => `
+        <div class="bp-stats-row">
+            <span>${r.label}</span>
+            <span>${r.home}</span>
+            <span>${r.away}</span>
+        </div>`).join("");
+    return `
+        <div class="bp-stats-table">
+            <div class="bp-stats-head">
+                <span></span>
+                <span>${table.home_short || "Домакин"}</span>
+                <span>${table.away_short || "Гост"}</span>
+            </div>
+            ${rows}
+        </div>`;
+}
+
 function update(data) {
     if (!data || data.type !== "LIVE_UPDATE") return;
 
@@ -229,9 +281,19 @@ function update(data) {
         bpSec.classList.toggle("halftime", pkg.phase === "halftime");
         document.getElementById("bp-section-label").textContent = pkg.title || "Ефирен пакет";
         document.getElementById("bp-score-lg").textContent = pkg.score_label || "";
-        document.getElementById("bp-stats-lg").innerHTML = (pkg.stats_lines || []).map(l =>
-            `<div class="bp-stat-lg">${l}</div>`
-        ).join("");
+        const statsLg = document.getElementById("bp-stats-lg");
+        const tableHtml = renderBroadcastStatsTableLg(pkg.stats_table);
+        if (statsLg) {
+            if (tableHtml) {
+                statsLg.innerHTML = tableHtml;
+            } else if ((pkg.stats_lines || []).length) {
+                statsLg.innerHTML = (pkg.stats_lines || []).map(l =>
+                    `<div class="bp-stat-lg">${l}</div>`
+                ).join("");
+            } else {
+                statsLg.innerHTML = "";
+            }
+        }
         const bulletsEl = document.getElementById("bp-bullets-lg");
         const wrapEl = document.getElementById("bp-wrap-lg");
         const loadEl = document.getElementById("bp-loading-lg");

@@ -639,6 +639,14 @@ def build_overlay_response(
         "home": stats.get("home", {}) if real_available else {},
         "away": stats.get("away", {}) if real_available else {},
     }
+    if match_phase in ("live", "finished") and fixture_id and not stats_for_pkg.get("home"):
+        cached_stats = stats_collector._stats_cache.get(fixture_id)
+        if cached_stats and cached_stats.get("data"):
+            cs = cached_stats["data"]
+            stats_for_pkg = {
+                "home": cs.get("home", {}),
+                "away": cs.get("away", {}),
+            }
     score_h = int(live_hg if live_hg is not None else match.get("home_goals") or 0)
     score_a = int(live_ag if live_ag is not None else match.get("away_goals") or 0)
 

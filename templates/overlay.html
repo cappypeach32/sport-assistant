@@ -1090,6 +1090,48 @@ body {
     letter-spacing: -0.02em;
 }
 .bp-stats { margin-bottom: 12px; }
+.bp-stats-table {
+    display: grid;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.15);
+}
+.bp-stats-head,
+.bp-stats-row {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr 1fr;
+    gap: 8px;
+    padding: 8px 12px;
+    align-items: center;
+}
+.bp-stats-head {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--border);
+}
+.bp-stats-head span:nth-child(n+2),
+.bp-stats-row span:nth-child(n+2) {
+    text-align: center;
+}
+.bp-stats-row {
+    font-size: 15px;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+}
+.bp-stats-row:last-child { border-bottom: none; }
+.bp-stats-row span:first-child {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+}
+.bp-stats-row span:nth-child(2) { color: var(--green); font-weight: 700; }
+.bp-stats-row span:nth-child(3) { color: var(--blue); font-weight: 700; }
 .bp-stat-line {
     font-size: 14px;
     color: var(--muted);
@@ -2159,6 +2201,25 @@ function renderPreflightChecklist(data) {
    ========================================================= */
 let _lastBpKey = "";
 
+function renderBroadcastStatsTable(table) {
+    if (!table?.available || !(table.rows || []).length) return "";
+    const rows = table.rows.map(r => `
+        <div class="bp-stats-row">
+            <span>${r.label}</span>
+            <span>${r.home}</span>
+            <span>${r.away}</span>
+        </div>`).join("");
+    return `
+        <div class="bp-stats-table">
+            <div class="bp-stats-head">
+                <span></span>
+                <span>${table.home_short || "Домакин"}</span>
+                <span>${table.away_short || "Гост"}</span>
+            </div>
+            ${rows}
+        </div>`;
+}
+
 function renderBroadcastPackage(data) {
     const card = document.getElementById("card-broadcast-package");
     if (!card) return;
@@ -2197,9 +2258,19 @@ function renderBroadcastPackage(data) {
     setText("bp-score", pkg.score_label || "");
 
     if (statsEl) {
-        statsEl.innerHTML = (pkg.stats_lines || []).map(l =>
-            `<div class="bp-stat-line">${l}</div>`
-        ).join("");
+        const tableHtml = renderBroadcastStatsTable(pkg.stats_table);
+        if (tableHtml) {
+            statsEl.innerHTML = tableHtml;
+            statsEl.style.display = "block";
+        } else if ((pkg.stats_lines || []).length) {
+            statsEl.innerHTML = (pkg.stats_lines || []).map(l =>
+                `<div class="bp-stat-line">${l}</div>`
+            ).join("");
+            statsEl.style.display = "block";
+        } else {
+            statsEl.innerHTML = "";
+            statsEl.style.display = "none";
+        }
     }
 
     if (pkg.phase === "halftime") {

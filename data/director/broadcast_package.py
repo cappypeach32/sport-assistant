@@ -33,6 +33,67 @@ def _extract_section(text: str, keywords: tuple[str, ...]) -> str:
     return ""
 
 
+def _short_team(name: str) -> str:
+    name = (name or "").strip()
+    if not name:
+        return "—"
+    parts = name.split()
+    return parts[-1] if len(parts) > 1 and len(parts[-1]) > 2 else name
+
+
+def _stat_val(v) -> str | None:
+    if v is None or v == "" or v in ("—", "–", "-", "n/a", "N/A"):
+        return None
+    return str(v)
+
+
+def _fmt_pct(v) -> str | None:
+    raw = _stat_val(v)
+    if raw is None:
+        return None
+    return raw if raw.endswith("%") else f"{raw}%"
+
+
+def build_stats_table(home: str, away: str, hs: dict, as_: dict) -> dict:
+    """Compact home/away stats table — omit rows with no API data."""
+    rows: list[dict] = []
+
+    h_sh = _stat_val(hs.get("shots_total"))
+    a_sh = _stat_val(as_.get("shots_total"))
+    if h_sh is not None or a_sh is not None:
+        rows.append({"label": "Удари", "home": h_sh or "—", "away": a_sh or "—"})
+
+    h_sot = _stat_val(hs.get("shots_on_target"))
+    a_sot = _stat_val(as_.get("shots_on_target"))
+    if h_sot is not None or a_sot is not None:
+        rows.append({"label": "В рамките", "home": h_sot or "—", "away": a_sot or "—"})
+
+    h_xg = _stat_val(hs.get("xg"))
+    a_xg = _stat_val(as_.get("xg"))
+    if h_xg is not None or a_xg is not None:
+        rows.append({"label": "xG", "home": h_xg or "—", "away": a_xg or "—"})
+
+    h_pos = _fmt_pct(hs.get("possession"))
+    a_pos = _fmt_pct(as_.get("possession"))
+    if h_pos is not None or a_pos is not None:
+        rows.append({"label": "Владение", "home": h_pos or "—", "away": a_pos or "—"})
+
+    return {
+        "available": bool(rows),
+        "home_short": _short_team(home),
+        "away_short": _short_team(away),
+        "rows": rows,
+    }
+
+
+def _stats_lines_from_table(table: dict) -> list[str]:
+    if not table.get("available"):
+        return []
+    h = table["home_short"]
+    a = table["away_short"]
+    return [f"{row['label']}: {h} {row['home']} · {a} {row['away']}" for row in table["rows"]]
+
+
 def build_halftime_package(
     home: str,
     away: str,
@@ -52,21 +113,15 @@ def build_halftime_package(
     if len(bullets) < 3:
         bullets = _ht_bullets_rule_based(home, away, score_home, score_away, hs, as_)
 
+    stats_table = build_stats_table(home, away, hs, as_)
+
     return {
         "active": True,
         "phase": "halftime",
         "title": "Полувреме — ефирен пакет",
         "score_label": f"{home} {score_home}:{score_away} {away}",
-        "stats_lines": [
-            f"Владение: {home} {hs.get('possession', '—')}% — {away} {as_.get('possession', '—')}%",
-            (
-                f"Удари: {home} {hs.get('shots_total', '—')} "
-                f"({hs.get('shots_on_target', '—')} в рамките) — "
-                f"{away} {as_.get('shots_total', '—')} "
-                f"({as_.get('shots_on_target', '—')})"
-            ),
-            f"xG: {home} {hs.get('xg', '—')} — {away} {as_.get('xg', '—')}",
-        ],
+        "stats_table": stats_table,
+        "stats_lines": _stats_lines_from_table(stats_table),
         "bullets": bullets[:3],
         "detail_loading": not bool(halftime_text),
     }
@@ -132,16 +187,15 @@ def build_fulltime_package(
         else:
             wrap = f"Мачът завърши {score_home}:{score_away} между {home} и {away}."
 
+    stats_table = build_stats_table(home, away, hs, as_)
+
     return {
         "active": True,
         "phase": "fulltime",
         "title": "Край — ефирен пакет",
         "score_label": f"{home} {score_home}:{score_away} {away}",
         "wrap_up": wrap[:600],
-        "stats_lines": [
-            f"Удари: {home} {hs.get('shots_total', '—')} — {away} {as_.get('shots_total', '—')}",
-            f"xG: {home} {hs.get('xg', '—')} — {away} {as_.get('xg', '—')}",
-            f"Владение: {home} {hs.get('possession', '—')}% — {away} {as_.get('possession', '—')}%",
-        ],
+        "stats_table": stats_table,
+        "stats_lines": _stats_lines_from_table(stats_table),
         "detail_loading": gpt_pending and not bool(postmatch_text),
     }
