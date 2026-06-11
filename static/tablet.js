@@ -234,7 +234,7 @@
     const backdrop = document.getElementById("sidebar-backdrop");
     if (!sidebar || !toggle) return;
 
-    const MQ = window.matchMedia("(max-width: 960px)");
+    const MQ = window.matchMedia("(max-width: 1200px)");
 
     function isDrawer() {
       return MQ.matches;
