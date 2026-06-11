@@ -114,6 +114,7 @@ def build_fulltime_package(
     score_away: int,
     live_stats: dict,
     postmatch_text: str = "",
+    gpt_pending: bool = False,
 ) -> dict:
     hs = live_stats.get("home", {}) if live_stats else {}
     as_ = live_stats.get("away", {}) if live_stats else {}
@@ -142,5 +143,5 @@ def build_fulltime_package(
             f"xG: {home} {hs.get('xg', '—')} — {away} {as_.get('xg', '—')}",
             f"Владение: {home} {hs.get('possession', '—')}% — {away} {as_.get('possession', '—')}%",
         ],
-        "detail_loading": not bool(postmatch_text),
+        "detail_loading": gpt_pending and not bool(postmatch_text),
     }

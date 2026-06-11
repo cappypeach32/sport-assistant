@@ -2162,9 +2162,20 @@ function renderBroadcastPackage(data) {
         return;
     }
 
-    const key = `${pkg.phase}:${pkg.score_label}:${(pkg.bullets || []).join("|")}:${pkg.wrap_up || ""}`;
+    const key = `${pkg.phase}:${pkg.score_label}:${(pkg.bullets || []).join("|")}:${pkg.wrap_up || ""}:${pkg.detail_loading ? "1" : "0"}`;
     card.style.display = "block";
     card.classList.toggle("phase-fulltime", pkg.phase === "fulltime");
+
+    if (loadEl) {
+        if (pkg.detail_loading) {
+            loadEl.style.display = "block";
+            loadEl.textContent = pkg.phase === "halftime"
+                ? "GPT полувременен анализ се генерира..."
+                : "GPT финален анализ се генерира...";
+        } else {
+            loadEl.style.display = "none";
+        }
+    }
 
     if (key === _lastBpKey) return;
     _lastBpKey = key;
@@ -2194,17 +2205,6 @@ function renderBroadcastPackage(data) {
         if (wrapEl) {
             wrapEl.style.display = "block";
             wrapEl.textContent = pkg.wrap_up || "";
-        }
-    }
-
-    if (loadEl) {
-        if (pkg.detail_loading) {
-            loadEl.style.display = "block";
-            loadEl.textContent = pkg.phase === "halftime"
-                ? "GPT полувременен анализ се генерира..."
-                : "GPT финален анализ се генерира...";
-        } else {
-            loadEl.style.display = "none";
         }
     }
 }
