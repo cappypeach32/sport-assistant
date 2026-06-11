@@ -151,7 +151,6 @@ body {
 }
 .sidebar-section-featured .sidebar-section-label { color: #eab308; }
 .sidebar-section-agenda .sidebar-section-label { color: var(--green); }
-.sidebar-section-preflight.preflight-all-ok .sidebar-section-label { color: var(--green); }
 .sidebar-section-chevron {
     font-size: 10px;
     color: var(--muted);
@@ -162,7 +161,6 @@ body {
 .sidebar-section.collapsed .sidebar-section-body { display: none; }
 .sidebar-section-body { padding-top: 6px; }
 .sidebar-section-tools { margin-top: 8px; }
-.sidebar-section-preflight { margin-top: 8px; }
 
 @media (min-width: 1201px) {
     .sidebar-section-tools .sidebar-section-head { display: none; }
@@ -1048,18 +1046,20 @@ body {
     border-color: var(--green);
     background: rgba(0,255,153,0.08);
 }
-
-@media (max-width: 1200px) {
-    .preflight-checklist.all-ok {
-        box-shadow: none;
-    }
+.preflight-main-card {
+    border-color: rgba(0, 255, 153, 0.2);
 }
-
-@media (min-width: 1201px) {
-    .preflight-checklist.all-ok {
-        box-shadow: 0 0 12px rgba(0,255,153,0.12);
-    }
+.preflight-main-card.preflight-all-ok {
+    border-color: var(--green);
+    box-shadow: 0 0 12px rgba(0, 255, 153, 0.1);
 }
+.preflight-main-card .preflight-checklist {
+    margin-bottom: 0;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+.preflight-main-label { color: var(--green); }
 .preflight-item {
     display: flex;
     align-items: center;
@@ -1230,19 +1230,6 @@ body {
             </div>
         </div>
 
-        <div class="sidebar-section sidebar-section-preflight collapsed" id="section-preflight" style="display:none">
-            <button type="button" class="sidebar-section-head" id="section-preflight-head"
-                    onclick="toggleSidebarSection('preflight')" aria-expanded="false" aria-controls="section-preflight-body">
-                <span class="sidebar-section-label" id="preflight-header-label">📋 Чеклист преди ефир</span>
-                <span class="sidebar-section-chevron" aria-hidden="true">▼</span>
-            </button>
-            <div class="sidebar-section-body" id="section-preflight-body">
-                <div class="preflight-checklist" id="preflight-checklist">
-                    <div id="preflight-items"></div>
-                </div>
-            </div>
-        </div>
-
         <div class="sidebar-section sidebar-section-tools collapsed" id="section-tools">
             <button type="button" class="sidebar-section-head" id="section-tools-head"
                     onclick="toggleSidebarSection('tools')" aria-expanded="false" aria-controls="section-tools-body">
@@ -1314,6 +1301,17 @@ body {
 
     <div class="internal-notice" id="internal-notice" style="display:none">
         Само реални данни от API-Football. Без симулации и демо събития — празните секции изчакват upstream.
+    </div>
+
+    <!-- PRE-FLIGHT CHECKLIST (main panel — not in sidebar) -->
+    <div class="card preflight-main-card" id="preflight-main" style="display:none">
+        <div class="card-label preflight-main-label">
+            <span class="dot"></span>
+            <span id="preflight-header-label">Чеклист преди ефир</span>
+        </div>
+        <div class="preflight-checklist" id="preflight-checklist">
+            <div id="preflight-items"></div>
+        </div>
     </div>
 
     <!-- MATCH HEADER -->
@@ -1576,7 +1574,6 @@ function switchTab(tab) {
 const SIDEBAR_SECTIONS = {
     featured:  { el: "section-featured",  key: "featuredCollapsed",         mobileDefault: true,  desktopDefault: false },
     agenda:    { el: "section-agenda",    key: "sidebarAgendaCollapsed",    mobileDefault: true,  desktopDefault: false },
-    preflight: { el: "section-preflight", key: "sidebarPreflightCollapsed", mobileDefault: true,  desktopDefault: true },
     tools:     { el: "section-tools",     key: "sidebarToolsCollapsed",     mobileDefault: true,  desktopDefault: false },
 };
 
@@ -2117,20 +2114,18 @@ function shouldShowPreflight(data) {
 }
 
 function renderPreflightChecklist(data) {
-    const section = document.getElementById("section-preflight");
+    const card = document.getElementById("preflight-main");
     const box = document.getElementById("preflight-checklist");
     const itemsEl = document.getElementById("preflight-items");
     const headerLabel = document.getElementById("preflight-header-label");
-    if (!section || !box || !itemsEl) return;
+    if (!card || !box || !itemsEl) return;
 
     if (!shouldShowPreflight(data)) {
-        section.style.display = "none";
-        refreshSidebarScroll();
+        card.style.display = "none";
         return;
     }
 
-    const wasHidden = section.style.display === "none";
-    section.style.display = "block";
+    card.style.display = "block";
     const items = [
         { ok: !!(data?.match?.raw_id || state.selectedId), label: "Мач избран" },
         { ok: !!(data?.prematch?.gpt_narrative), label: "GPT guide готов" },
@@ -2141,24 +2136,17 @@ function renderPreflightChecklist(data) {
     const allOk = items.every(i => i.ok);
     const done = items.filter(i => i.ok).length;
     box.classList.toggle("all-ok", allOk);
-    section.classList.toggle("preflight-all-ok", allOk);
+    card.classList.toggle("preflight-all-ok", allOk);
     if (headerLabel) {
         headerLabel.textContent = allOk
-            ? "📋 Чеклист · готов ✓"
-            : `📋 Чеклист преди ефир (${done}/${items.length})`;
+            ? `Чеклист преди ефир · готов ✓`
+            : `Чеклист преди ефир (${done}/${items.length})`;
     }
     itemsEl.innerHTML = items.map(i => `
         <div class="preflight-item ${i.ok ? "ok" : "pending"}">
             <span class="pf-icon">${i.ok ? "✓" : "○"}</span>
             <span>${i.label}</span>
         </div>`).join("");
-
-    if (wasHidden && isCompactSidebar() && localStorage.getItem("sidebarPreflightCollapsed") === null) {
-        localStorage.setItem("sidebarPreflightCollapsed", "1");
-    }
-    applySidebarSection("preflight");
-    updateSidebarScrollHint();
-    refreshSidebarScroll();
 }
 
 /* =========================================================
