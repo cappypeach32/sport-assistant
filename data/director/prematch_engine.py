@@ -153,6 +153,7 @@ class PreMatchEngine:
         self._raw_cache:   dict = {}   # general data cache
         self._gpt_narrative_cache: dict = {}  # fixture_id → {ts, text}
         self._events_cache: dict = {}   # fixture_id → events list
+        self._fixture_players_cache: dict = {}  # fixture_id → fixtures/players response
 
     def _cache_ttl_for(self, result: dict) -> int:
         data = result.get("data", {}) if isinstance(result.get("data"), dict) else {}
@@ -545,6 +546,118 @@ class PreMatchEngine:
 
         return result
 
+    @staticmethod
+    def _should_use_league_topscorers(league_name: str) -> bool:
+        """League topscorer table is meaningful for domestic leagues only."""
+        n = (league_name or "").lower()
+        skip = (
+            "friend", "world cup", "fifa", "euro championship", "euro ",
+            "copa america", "copa afr", "africa cup", "nations league",
+            "qualification", "qualifying", "international",
+        )
+        return not any(k in n for k in skip)
+
+    @staticmethod
+    def _is_countable_goal_event(ev: dict) -> bool:
+        if ev.get("type") != "Goal":
+            return False
+        detail = (ev.get("detail") or "").lower()
+        skip = (
+            "own goal", "missed penalty", "penalty missed",
+            "penalty shootout", "cancelled", "disallowed", "var cancelled",
+        )
+        return not any(s in detail for s in skip)
+
+    def _get_fixture_players_cached(self, fixture_id: int) -> list:
+        if fixture_id in self._fixture_players_cache:
+            return self._fixture_players_cache[fixture_id]
+        data = self._get("fixtures/players", {"fixture": fixture_id}) or []
+        self._fixture_players_cache[fixture_id] = data
+        return data
+
+    def _tally_team_from_fixture_players(
+        self,
+        fixture_id: int,
+        team_id: int,
+        tallies: dict[str, dict],
+    ) -> bool:
+        """Per-match player stats (preferred over parsing raw events)."""
+        found = False
+        for block in self._get_fixture_players_cached(fixture_id):
+            if (block.get("team") or {}).get("id") != team_id:
+                continue
+            for entry in block.get("players") or []:
+                player = entry.get("player") or {}
+                stats_list = entry.get("statistics") or []
+                if not stats_list:
+                    continue
+                st = stats_list[0]
+                pid = player.get("id")
+                pname = player.get("name") or ""
+                games = st.get("games") or {}
+                minutes = games.get("minutes") or 0
+                goals_block = st.get("goals") or {}
+                goals = int(goals_block.get("total") or 0)
+                assists = int(goals_block.get("assists") or 0)
+                if not minutes and goals == 0 and assists == 0:
+                    continue
+                if not pname and not pid:
+                    continue
+                key = self._touch_player_tally(tallies, pid, pname)
+                tallies[key]["goals"] += goals
+                tallies[key]["assists"] += assists
+                if minutes:
+                    tallies[key]["apps"] += 1
+                found = True
+            break
+        return found
+
+    def _tally_team_from_fixture_events(
+        self,
+        fixture_id: int,
+        team_id: int,
+        tallies: dict[str, dict],
+    ) -> None:
+        """Fallback: parse goal events when fixtures/players is unavailable."""
+        seen_goals: set[tuple] = set()
+        appeared: set[str] = set()
+
+        for ev in self._get_fixture_events_cached(fixture_id):
+            ev_team = (ev.get("team") or {}).get("id")
+            if ev_team != team_id:
+                continue
+
+            player = ev.get("player") or {}
+            assist = ev.get("assist") or {}
+            player_id   = player.get("id")
+            assist_id   = assist.get("id")
+            player_name = player.get("name", "") or ""
+            assist_name = assist.get("name", "") or ""
+            minute = (ev.get("time") or {}).get("elapsed")
+
+            if player_name or player_id:
+                appeared.add(self._player_tally_key(player_id, player_name))
+            if assist_name or assist_id:
+                appeared.add(self._player_tally_key(assist_id, assist_name))
+
+            if self._is_countable_goal_event(ev) and (player_name or player_id):
+                dedupe = (fixture_id, minute, player_id or player_name, ev.get("detail"))
+                if dedupe in seen_goals:
+                    continue
+                seen_goals.add(dedupe)
+                key = self._touch_player_tally(tallies, player_id, player_name)
+                tallies[key]["goals"] += 1
+                if assist_name or assist_id:
+                    akey = self._touch_player_tally(tallies, assist_id, assist_name)
+                    tallies[akey]["assists"] += 1
+
+        for key in appeared:
+            tallies.setdefault(key, {
+                "goals": 0, "assists": 0, "apps": 0,
+                "player_id": None, "names": set(),
+            })
+            tallies[key]["apps"] += 1
+
     def _get_fixture_events_cached(self, fixture_id: int) -> list:
         if fixture_id in self._events_cache:
             return self._events_cache[fixture_id]
@@ -679,6 +792,7 @@ class PreMatchEngine:
         if fixture_ids:
             with ThreadPoolExecutor(max_workers=6) as executor:
                 list(executor.map(self._get_fixture_events_cached, fixture_ids))
+                list(executor.map(self._get_fixture_players_cached, fixture_ids))
 
         tallies: dict[str, dict] = {}
 
@@ -686,38 +800,8 @@ class PreMatchEngine:
             fid = fixture.get("fixture", {}).get("id")
             if not fid:
                 continue
-            appeared: set[str] = set()
-            for ev in self._get_fixture_events_cached(fid):
-                ev_team = (ev.get("team") or {}).get("id")
-                if ev_team != team_id:
-                    continue
-
-                player = ev.get("player") or {}
-                assist = ev.get("assist") or {}
-                player_id   = player.get("id")
-                assist_id   = assist.get("id")
-                player_name = player.get("name", "") or ""
-                assist_name = assist.get("name", "") or ""
-
-                if player_name or player_id:
-                    appeared.add(self._player_tally_key(player_id, player_name))
-                if assist_name or assist_id:
-                    appeared.add(self._player_tally_key(assist_id, assist_name))
-
-                if ev.get("type") == "Goal" and ev.get("detail") != "Own Goal":
-                    if player_name or player_id:
-                        key = self._touch_player_tally(tallies, player_id, player_name)
-                        tallies[key]["goals"] += 1
-                if assist_name or assist_id:
-                    key = self._touch_player_tally(tallies, assist_id, assist_name)
-                    tallies[key]["assists"] += 1
-
-            for key in appeared:
-                tallies.setdefault(key, {
-                    "goals": 0, "assists": 0, "apps": 0,
-                    "player_id": None, "names": set(),
-                })
-                tallies[key]["apps"] += 1
+            if not self._tally_team_from_fixture_players(fid, team_id, tallies):
+                self._tally_team_from_fixture_events(fid, team_id, tallies)
 
         if not tallies:
             return []
@@ -758,12 +842,13 @@ class PreMatchEngine:
             return []
         max_g = max(p.get("goals") or 0 for p in players)
         max_a = max(p.get("assists") or 0 for p in players)
+        tied_scorers = sum(1 for p in players if (p.get("goals") or 0) == max_g and max_g > 0)
         for p in players:
-            p["label"] = PreMatchEngine._format_key_player_label(p, max_g, max_a)
+            p["label"] = PreMatchEngine._format_key_player_label(p, max_g, max_a, tied_scorers)
         return players
 
     @staticmethod
-    def _format_key_player_label(player: dict, max_goals: int, max_assists: int) -> str:
+    def _format_key_player_label(player: dict, max_goals: int, max_assists: int, tied_scorers: int = 1) -> str:
         g = player.get("goals") or 0
         a = player.get("assists") or 0
         src = player.get("source", "")
@@ -772,7 +857,7 @@ class PreMatchEngine:
         if g > 0:
             line = f"⚽ {g} гола"
             if g == max_goals and max_goals > 0:
-                line += " — най-добър реализатор"
+                line += " — най-добър реализатор" if tied_scorers == 1 else " — в топ реализаторите"
             chunks.append(line)
         if a > 0:
             line = f"🎯 {a} асист."
@@ -797,8 +882,9 @@ class PreMatchEngine:
         team_id: int,
         limit: int = 4,
         season: int | None = None,
+        league_name: str = "",
     ) -> list:
-        if league_players:
+        if league_players and self._should_use_league_topscorers(league_name):
             sorted_p = sorted(
                 league_players,
                 key=lambda x: (x.get("goals") or 0, x.get("assists") or 0),
@@ -837,14 +923,15 @@ class PreMatchEngine:
         home_id: int,
         away_id: int,
         season: int | None = None,
+        league_name: str = "",
     ) -> dict:
         """League topscorers when available; else real stats from recent official matches."""
         return {
             "home": self._resolve_team_key_players(
-                top_scorers.get("home") or [], home_id, season=season,
+                top_scorers.get("home") or [], home_id, season=season, league_name=league_name,
             ),
             "away": self._resolve_team_key_players(
-                top_scorers.get("away") or [], away_id, season=season,
+                top_scorers.get("away") or [], away_id, season=season, league_name=league_name,
             ),
         }
 
@@ -2446,7 +2533,8 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         away_stats  = results.get("away_stats", {})
         standings   = results.get("standings", {})
         top_scorers = self._enrich_key_players(
-            results.get("top_scorers", {}), home_id, away_id, season=season,
+            results.get("top_scorers", {}), home_id, away_id,
+            season=season, league_name=meta.get("league_name", ""),
         )
         coaches     = results.get("coaches", {})
         referee     = results.get("referee", {})
@@ -2554,7 +2642,8 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         away_stats  = results.get("away_stats", {})
         standings   = results.get("standings", {})
         top_scorers = self._enrich_key_players(
-            results.get("top_scorers", {}), home_id, away_id, season=season,
+            results.get("top_scorers", {}), home_id, away_id,
+            season=season, league_name=meta.get("league_name", ""),
         )
         coaches     = results.get("coaches", {})
         referee     = results.get("referee", {})
