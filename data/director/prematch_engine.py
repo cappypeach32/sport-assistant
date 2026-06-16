@@ -1892,7 +1892,7 @@ class PreMatchEngine:
 Алтернатива: {pred.get('alt_score', '—')}
 Над 2.5 гола: {pred.get('over25_pct', '—')}% · И двата отбора: {pred.get('btts_pct', '—')}%"""
 
-    def _finalize_prematch_data(self, data: dict, fixture_id: int | None = None) -> dict:
+    def _finalize_prematch_data(self, data: dict, fixture_id=None) -> dict:
         data["analyzed_at"] = datetime.now(timezone.utc).isoformat()
         data["fingerprint"] = self.compute_data_fingerprint(data)
         if data.get("gpt_narrative"):

@@ -10,7 +10,7 @@ load_dotenv()
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 
@@ -1054,17 +1054,28 @@ def debug_stats(fixture_id: int):
 # =====================================================
 
 @app.get("/")
-def home():
+def home(request: Request):
+    accept = (request.headers.get("accept") or "").lower()
+    if "text/html" in accept and "application/json" not in accept:
+        return RedirectResponse(url="/overlay", status_code=307)
     return {
         "status":  "ONLINE",
         "mode":    "AI_MATCH_INTELLIGENCE_V3",
         "version": "3.0.0",
+        "overlay": "/overlay",
         "phase1": {
             "xg_momentum_engine":   True,
             "tactical_engine":      True,
             "key_moments_detector": True,
         }
     }
+
+
+@app.get("/overlays")
+@app.get("/overlay/")
+def overlay_aliases():
+    """Common typos / trailing slash → canonical overlay URL."""
+    return RedirectResponse(url="/overlay", status_code=307)
 
 
 # =====================================================
