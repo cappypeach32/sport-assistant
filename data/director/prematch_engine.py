@@ -152,6 +152,7 @@ class PreMatchEngine:
         self._gpt_ts:      dict = {}   # fixture_id → last GPT call ts
         self._raw_cache:   dict = {}   # general data cache
         self._gpt_narrative_cache: dict = {}  # fixture_id → {ts, text}
+        self._stream_facts_cache: dict = {}    # fixture_id → {ts, facts: list[str]}
         self._events_cache: dict = {}   # fixture_id → events list
         self._fixture_players_cache: dict = {}  # fixture_id → fixtures/players response
 
@@ -179,6 +180,236 @@ class PreMatchEngine:
             data["gpt_narrative"] = cached
             data["broadcast_guide_draft"] = ""
             data["gpt_guide_pending"] = False
+
+    def _get_cached_stream_facts(self, fixture_id: int) -> list[str]:
+        cached = self._stream_facts_cache.get(fixture_id)
+        if cached and time.time() - cached["ts"] < GPT_NARRATIVE_TTL:
+            return cached.get("facts") or []
+        return []
+
+    def _store_stream_facts_cache(self, fixture_id: int, facts: list[str]) -> None:
+        if facts:
+            self._stream_facts_cache[fixture_id] = {"ts": time.time(), "facts": facts}
+
+    def _apply_cached_stream_facts(self, fixture_id: int, data: dict) -> None:
+        cached = self._get_cached_stream_facts(fixture_id)
+        if cached:
+            data["stream_facts"] = cached
+            data["stream_facts_gpt_pending"] = False
+
+    @staticmethod
+    def _form_streak(form_list: list, char: str) -> int:
+        n = 0
+        for r in form_list or []:
+            if r == char:
+                n += 1
+            else:
+                break
+        return n
+
+    @staticmethod
+    def _unbeaten_streak(form_list: list) -> int:
+        n = 0
+        for r in form_list or []:
+            if r in ("W", "D"):
+                n += 1
+            else:
+                break
+        return n
+
+    def _build_stream_facts(self, data: dict) -> list[str]:
+        """Rule-based stream trivia — source of truth for GPT polish."""
+        facts: list[str] = []
+        home   = data.get("home", "")
+        away   = data.get("away", "")
+        hs     = data.get("home_stats") or {}
+        as_    = data.get("away_stats") or {}
+        hst    = data.get("home_standing") or {}
+        ast    = data.get("away_standing") or {}
+        pred   = data.get("prediction") or {}
+        coaches = data.get("coaches") or {}
+        referee = data.get("referee") or {}
+        injuries = data.get("injuries") or {}
+        h2h_raw = data.get("h2h_raw") or []
+
+        hw = data.get("h2h_home_wins", 0)
+        aw = data.get("h2h_away_wins", 0)
+        h2h_count = data.get("h2h_count", 0)
+        avg_goals = data.get("avg_h2h_goals", 0)
+
+        if h2h_count >= 2:
+            if hw > aw and hw >= 2:
+                facts.append(
+                    f"{home} доминира в директните срещи — "
+                    f"{hw} победи от последните {h2h_count} мача срещу {away}"
+                )
+            elif aw > hw and aw >= 2:
+                facts.append(
+                    f"{away} доминира в директните срещи — "
+                    f"{aw} победи от последните {h2h_count} мача срещу {home}"
+                )
+            if avg_goals >= 3.5:
+                facts.append(f"Директните срещи са голови — средно {avg_goals} гола на мач")
+            elif avg_goals <= 1.5:
+                facts.append(f"H2H мачовете са тактически — средно само {avg_goals} гола на мач")
+
+        if data.get("h2h_latest_scorers"):
+            facts.append(data["h2h_latest_scorers"])
+
+        if h2h_raw and h2h_count == 1:
+            latest = h2h_raw[0]
+            comp = latest.get("competition", "")
+            comp_bit = f" ({comp})" if comp else ""
+            facts.append(
+                f"Единствената директна среща ({latest.get('date', '—')}): "
+                f"{latest.get('home')} {latest.get('home_goals')}:{latest.get('away_goals')} "
+                f"{latest.get('away')}{comp_bit}"
+            )
+
+        for team, stats in ((home, hs), (away, as_)):
+            form = stats.get("form") or []
+            w_streak = self._form_streak(form, "W")
+            l_streak = self._form_streak(form, "L")
+            ub_streak = self._unbeaten_streak(form)
+            if w_streak >= 3:
+                facts.append(f"{team} спечели последните {w_streak} мача подред")
+            if l_streak >= 3:
+                facts.append(
+                    f"{team} не е печелил последните {l_streak} мача "
+                    f"({stats.get('form_str', '')})"
+                )
+            if ub_streak >= 4:
+                facts.append(f"{team} е непобедим в последните {ub_streak} мача")
+
+            avg = float(stats.get("avg_score") or 0)
+            if avg >= 2.0 and (stats.get("played") or 0) >= 3:
+                facts.append(f"{team} вкарва средно {avg:.1f} гола на мач в последните мачове")
+
+            avg_c = float(stats.get("avg_conc") or 0)
+            if avg_c <= 0.8 and (stats.get("played") or 0) >= 3:
+                facts.append(f"{team} допуска само {avg_c:.1f} гола на мач — стабилна отбрана")
+
+        btts = pred.get("btts_pct")
+        over25 = pred.get("over25_pct")
+        if btts and btts >= 60:
+            facts.append(f"Статистически модел: {btts}% шанс и двата отбора да вкарят")
+        if over25 and over25 >= 65:
+            facts.append(f"Моделът дава {over25}% за над 2.5 гола — потенциално открит мач")
+        elif over25 and over25 <= 35:
+            facts.append(f"Само {over25}% за над 2.5 гола по модела — вероятно затегната среща")
+
+        ch, ca = coaches.get("home"), coaches.get("away")
+        if ch and ca:
+            facts.append(f"Треньорски дуел: {ch} ({home}) срещу {ca} ({away})")
+
+        if referee.get("name"):
+            if referee.get("cards_profile"):
+                facts.append(f"Съдия {referee['name']} — {referee['cards_profile']}")
+            elif referee.get("strictness"):
+                facts.append(f"Съдия {referee['name']} — профил: {referee['strictness']}")
+
+        for side_key, team in (("home", home), ("away", away)):
+            players = (data.get("top_scorers") or {}).get(side_key) or []
+            if players:
+                p = players[0]
+                label = p.get("label") or ""
+                if p.get("goals") or label:
+                    detail = label or f"{p.get('goals', 0)} гола"
+                    facts.append(f"Звездата на {team}: {p.get('name', '?')} — {detail}")
+
+        gs = data.get("group_scenarios") or {}
+        for bullet in (gs.get("bullets") or [])[:2]:
+            facts.append(bullet)
+
+        inj_h = injuries.get("home") or []
+        inj_a = injuries.get("away") or []
+        if len(inj_h) >= 2:
+            names = ", ".join(i.get("name", "?") for i in inj_h[:3])
+            suffix = "..." if len(inj_h) > 3 else ""
+            facts.append(f"{home} с важни липси: {names}{suffix}")
+        if len(inj_a) >= 2:
+            names = ", ".join(i.get("name", "?") for i in inj_a[:3])
+            suffix = "..." if len(inj_a) > 3 else ""
+            facts.append(f"{away} с важни липси: {names}{suffix}")
+
+        if data.get("standings_reliable"):
+            hp, ap = hst.get("points"), ast.get("points")
+            if hp and hp == ap:
+                facts.append(
+                    f"И двата отбора са с {hp} точки — директен дуел за позицията в групата"
+                )
+            elif hst.get("position") == 1 and (hst.get("played") or 0) > 0:
+                facts.append(f"{home} е лидер в групата с {hst.get('points', 0)} точки")
+            elif ast.get("position") == 1 and (ast.get("played") or 0) > 0:
+                facts.append(f"{away} е лидер в групата с {ast.get('points', 0)} точки")
+
+        seen: set[str] = set()
+        unique: list[str] = []
+        for f in facts:
+            f = f.strip()
+            if f and f not in seen:
+                seen.add(f)
+                unique.append(f)
+        return unique[:10]
+
+    def _parse_stream_facts_gpt(self, raw: str, fallback: list[str]) -> list[str]:
+        bullets: list[str] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m = re.match(r"^[•\-\*]\s*(.+)$", line) or re.match(r"^\d+\.\s*(.+)$", line)
+            if m:
+                bullets.append(m.group(1).strip())
+        return bullets[:8] if bullets else fallback[:8]
+
+    def _generate_stream_facts_gpt(self, fixture_id: int, data: dict) -> list[str]:
+        """GPT polish of rule-based facts — no new data allowed."""
+        if not _gpt_available or _gpt_client is None:
+            return []
+
+        raw_facts = data.get("stream_facts") or self._build_stream_facts(data)
+        if not raw_facts:
+            return []
+
+        cached = self._get_cached_stream_facts(fixture_id)
+        if cached:
+            return cached
+
+        home = data.get("home", "")
+        away = data.get("away", "")
+        facts_text = "\n".join(f"{i + 1}. {f}" for i, f in enumerate(raw_facts))
+        target = min(len(raw_facts), 8)
+
+        prompt = f"""Ти си спортен коментатор за live стрийм. Пишеш САМО на Български.
+
+МАЧ: {home} срещу {away}
+
+Ето ФАКТИ (използвай САМО тях — без нови числа, имена или резултати):
+{facts_text}
+
+Преформулирай ги в {target} кратки bullets за казване на глас в ефир (15–30 сек всеки).
+Стил: жив, интересен, но 100% фактически — без измисляне.
+
+Отговори САМО с bullets, по един на ред, започващи с „• ":
+• [текст]
+• [текст]"""
+
+        try:
+            resp = _gpt_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=450,
+                temperature=0.65,
+            )
+            raw = resp.choices[0].message.content.strip()
+            polished = self._parse_stream_facts_gpt(raw, raw_facts)
+            self._store_stream_facts_cache(fixture_id, polished)
+            print(f"[STREAM-FACTS] GPT polished {len(polished)} facts for fixture {fixture_id}")
+            return polished
+        except Exception as e:
+            print(f"[STREAM-FACTS] GPT error: {e}")
+            return []
 
     # --------------------------------------------------
     # API HELPERS
@@ -1661,7 +1892,7 @@ class PreMatchEngine:
 Алтернатива: {pred.get('alt_score', '—')}
 Над 2.5 гола: {pred.get('over25_pct', '—')}% · И двата отбора: {pred.get('btts_pct', '—')}%"""
 
-    def _finalize_prematch_data(self, data: dict) -> dict:
+    def _finalize_prematch_data(self, data: dict, fixture_id: int | None = None) -> dict:
         data["analyzed_at"] = datetime.now(timezone.utc).isoformat()
         data["fingerprint"] = self.compute_data_fingerprint(data)
         if data.get("gpt_narrative"):
@@ -1670,6 +1901,15 @@ class PreMatchEngine:
         else:
             data["broadcast_guide_draft"] = self._build_instant_broadcast_guide(data)
             data["gpt_guide_pending"] = _gpt_available
+
+        if not data.get("stream_facts"):
+            data["stream_facts"] = self._build_stream_facts(data)
+        if fixture_id:
+            self._apply_cached_stream_facts(fixture_id, data)
+        if "stream_facts_gpt_pending" not in data:
+            data["stream_facts_gpt_pending"] = (
+                _gpt_available and bool(data.get("stream_facts"))
+            )
         return data
 
     # --------------------------------------------------
@@ -2546,7 +2786,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             referee=referee, injuries=injuries,
         )
         self._apply_cached_narrative(fixture_id, data)
-        self._finalize_prematch_data(data)
+        self._finalize_prematch_data(data, fixture_id)
 
         # No GPT here — that's Phase 2 (unless narrative restored from cache)
         result = {"available": True, "data": data, "meta": meta}
@@ -2576,21 +2816,32 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         data   = result.get("data", {})
 
         self._apply_cached_narrative(fixture_id, data)
-        if data.get("gpt_narrative"):
+        self._apply_cached_stream_facts(fixture_id, data)
+
+        needs_narrative = not data.get("gpt_narrative")
+        needs_facts = bool(data.get("stream_facts_gpt_pending"))
+
+        if not needs_narrative and not needs_facts:
             result["data"] = data
             self._cache[fixture_id] = {"ts": time.time(), "data": result}
             return result
 
-        narrative = self._generate_gpt_editorial(fixture_id, data)
-        if not narrative:
-            return None
+        if needs_narrative:
+            narrative = self._generate_gpt_editorial(fixture_id, data)
+            if narrative:
+                data["gpt_narrative"] = narrative
+                data["broadcast_guide_draft"] = ""
+                data["gpt_guide_pending"] = False
 
-        data["gpt_narrative"] = narrative
-        data["broadcast_guide_draft"] = ""
-        data["gpt_guide_pending"] = False
+        if needs_facts:
+            polished = self._generate_stream_facts_gpt(fixture_id, data)
+            if polished:
+                data["stream_facts"] = polished
+            data["stream_facts_gpt_pending"] = False
+
         result["data"] = data
         self._cache[fixture_id] = {"ts": time.time(), "data": result}
-        return result
+        return result if (data.get("gpt_narrative") or data.get("stream_facts")) else None
 
     def analyze(self, fixture_id: int, match: dict) -> dict:
         """
@@ -2657,7 +2908,12 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         self._apply_cached_narrative(fixture_id, data)
         if _gpt_available and not data.get("gpt_narrative"):
             data["gpt_narrative"] = self._generate_gpt_editorial(fixture_id, data)
-        self._finalize_prematch_data(data)
+        self._finalize_prematch_data(data, fixture_id)
+        if _gpt_available and not self._get_cached_stream_facts(fixture_id):
+            polished = self._generate_stream_facts_gpt(fixture_id, data)
+            if polished:
+                data["stream_facts"] = polished
+            data["stream_facts_gpt_pending"] = False
 
         result = {"available": True, "data": data, "meta": meta}
         self._cache[fixture_id] = {"ts": time.time(), "data": result}

@@ -789,6 +789,17 @@ body {
 }
 .kf-item::before { content: "→"; color: var(--green); flex-shrink: 0; }
 
+.stream-facts-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.stream-fact-item {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 10px 12px; border-radius: 10px;
+    background: rgba(167,139,250,0.08); border: 1px solid rgba(167,139,250,0.15);
+    font-size: 13px; line-height: 1.45; color: var(--text);
+}
+.stream-fact-item::before {
+    content: "💡"; flex-shrink: 0; font-size: 14px; line-height: 1.4;
+}
+
 .prediction-block {
     display: flex; gap: 10px; align-items: stretch;
 }
@@ -1439,6 +1450,16 @@ body {
             Полувременен анализ
         </div>
         <div id="halftime-sections"></div>
+    </div>
+
+    <!-- STREAM FACTS -->
+    <div class="card" id="card-stream-facts" style="display:none">
+        <div class="card-label">
+            <span class="dot" style="background:var(--purple,#a78bfa)"></span>
+            💡 Интересни факти за ефира
+            <span id="stream-facts-status" class="data-source-badge ds-draft" style="display:none"></span>
+        </div>
+        <div id="stream-facts-list" class="stream-facts-list"></div>
     </div>
 
     <!-- PRE-MATCH ANALYSIS -->
@@ -3061,6 +3082,47 @@ function renderHalftimeAnalysis(data) {
 }
 
 /* =========================================================
+   STREAM FACTS
+   ========================================================= */
+let _streamFactsRenderedKey = "";
+
+function renderStreamFacts(data) {
+    const pm = data.prematch || {};
+    const card = document.getElementById("card-stream-facts");
+    const list = document.getElementById("stream-facts-list");
+    const status = document.getElementById("stream-facts-status");
+    if (!card || !list) return;
+
+    const facts = pm.stream_facts || [];
+    const phase = data.phase || "prematch";
+
+    if (!facts.length || phase === "finished") {
+        card.style.display = "none";
+        return;
+    }
+
+    card.style.display = "block";
+
+    const pending = pm.stream_facts_gpt_pending && facts.length;
+    if (status) {
+        if (pending) {
+            status.style.display = "inline-flex";
+            status.textContent = "⏳ AI формулировка...";
+        } else {
+            status.style.display = "none";
+        }
+    }
+
+    const renderKey = `${facts.join("|")}|${pending}`;
+    if (_streamFactsRenderedKey === renderKey) return;
+    _streamFactsRenderedKey = renderKey;
+
+    list.innerHTML = facts.map(f =>
+        `<div class="stream-fact-item">${f}</div>`
+    ).join("");
+}
+
+/* =========================================================
    PRE-MATCH ANALYSIS
    ========================================================= */
 let _prematchRenderedKey = "";
@@ -3092,7 +3154,7 @@ function renderPrematch(data) {
     }
 
     // Skip full re-render if prematch data hasn't changed (prevents flicker)
-    const renderKey = `${home}|${away}|${pm.home_form}|${pm.away_form}|${pm.prediction?.home_win_pct}|${pm.fingerprint}|${(pm.gpt_narrative||"").length}|${(pm.broadcast_guide_draft||"").length}|${pm.gpt_guide_pending}|${pm.h2h_latest_scorers}`;
+    const renderKey = `${home}|${away}|${pm.home_form}|${pm.away_form}|${pm.prediction?.home_win_pct}|${pm.fingerprint}|${(pm.gpt_narrative||"").length}|${(pm.broadcast_guide_draft||"").length}|${pm.gpt_guide_pending}|${pm.h2h_latest_scorers}|${(pm.stream_facts||[]).join("|")}|${pm.stream_facts_gpt_pending}`;
     if (_prematchRenderedKey === renderKey) return;
     _prematchRenderedKey = renderKey;
 
@@ -3417,9 +3479,9 @@ function renderPrematch(data) {
    PHASE-AWARE CARD VISIBILITY
    ========================================================= */
 function showCardsForPhase(phase) {
-    const liveCards     = ["card-momentum","card-moments","card-tactical","card-stats","card-events","card-narrative","card-table-impact","card-win-prob","card-commentary","card-lineups"];
+    const liveCards     = ["card-momentum","card-moments","card-tactical","card-stats","card-events","card-narrative","card-table-impact","card-win-prob","card-commentary","card-lineups","card-stream-facts"];
     const finishedCards = ["card-postmatch","card-win-prob","card-stats","card-events","card-lineups"];
-    const prematchCards = ["card-prematch","card-lineups"];
+    const prematchCards = ["card-prematch","card-lineups","card-stream-facts"];
 
     document.getElementById("card-header").style.display  = "block";
     document.getElementById("waiting-state").style.display = "none";
@@ -3485,6 +3547,7 @@ function update(data) {
         renderLineups(data);
         renderPreflightChecklist(data);
         renderPrematch(data);
+        renderStreamFacts(data);
         renderLiveNarrative(data);
         renderHalftimeAnalysis(data);
         renderTableImpact(data);

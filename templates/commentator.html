@@ -146,6 +146,17 @@ body {
     font-size: clamp(1.2rem, 3.2vw, 1.55rem);
     line-height: 1.5;
 }
+.section-facts {
+    border: 2px solid var(--purple);
+    background: linear-gradient(135deg, rgba(167,139,250,0.14), rgba(77,159,255,0.05));
+}
+.fact-item {
+    font-size: clamp(1.15rem, 3vw, 1.45rem);
+    line-height: 1.5;
+    padding: 0.85rem 0;
+    border-bottom: 1px solid var(--border);
+}
+.fact-item:last-child { border-bottom: none; }
 </style>
 </head>
 <body class="tablet-commentator">
@@ -193,6 +204,12 @@ body {
     <div class="section" id="sec-points" style="display:none">
         <div class="section-label">Говорни точки</div>
         <div id="points"></div>
+    </div>
+
+    <div class="section section-facts" id="sec-stream-facts" style="display:none">
+        <div class="section-label">💡 Интересни факти</div>
+        <div id="stream-facts-status-cmt" style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem"></div>
+        <div id="stream-facts-cmt"></div>
     </div>
 
     <div class="section" id="sec-prematch" style="display:none">
@@ -350,6 +367,25 @@ function update(data) {
     }
 
     const pm = data.prematch || {};
+    const facts = pm.stream_facts || [];
+    const factsSec = document.getElementById("sec-stream-facts");
+    const factsEl = document.getElementById("stream-facts-cmt");
+    const factsStatus = document.getElementById("stream-facts-status-cmt");
+
+    if (facts.length && factsSec && factsEl && data.phase !== "finished") {
+        factsSec.style.display = "block";
+        if (factsStatus) {
+            factsStatus.textContent = pm.stream_facts_gpt_pending
+                ? "⏳ Моментални факти — AI формулировка..."
+                : "";
+        }
+        factsEl.innerHTML = facts.map(f =>
+            `<div class="fact-item">💡 ${f}</div>`
+        ).join("");
+    } else if (factsSec) {
+        factsSec.style.display = "none";
+    }
+
     const guideText = pm.gpt_narrative || pm.broadcast_guide_draft || "";
     const pmSec = document.getElementById("sec-prematch");
     const guideEl = document.getElementById("prematch-guide-sections");

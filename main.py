@@ -764,6 +764,8 @@ def build_overlay_response(
             "analyzed_at":     pm_data.get("analyzed_at", ""),
             "broadcast_guide_draft": pm_data.get("broadcast_guide_draft", ""),
             "gpt_guide_pending":   pm_data.get("gpt_guide_pending", False),
+            "stream_facts":        pm_data.get("stream_facts", []),
+            "stream_facts_gpt_pending": pm_data.get("stream_facts_gpt_pending", False),
         },
 
         "table_impact":      table_impact,
