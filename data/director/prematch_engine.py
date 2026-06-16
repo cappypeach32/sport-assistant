@@ -512,6 +512,20 @@ class PreMatchEngine:
         typ  = (league.get("type") or "").lower()
         return typ == "friendly" or "friend" in name
 
+    @staticmethod
+    def _fixture_sort_key(fixture: dict) -> str:
+        ts = (fixture.get("fixture") or {}).get("timestamp")
+        if ts:
+            return str(ts).zfill(12)
+        return (fixture.get("fixture") or {}).get("date") or ""
+
+    @classmethod
+    def _official_fixtures_newest(cls, raw: list, limit: int) -> list:
+        """Last N finished official matches, newest first — stable window for key players."""
+        official = [f for f in raw if not cls._is_friendly_fixture(f)]
+        official.sort(key=cls._fixture_sort_key, reverse=True)
+        return official[:limit]
+
     def _aggregate_fixtures(self, fixtures: list, team_id: int) -> dict:
         wins = draws = losses = scored = conceded = 0
         form: list[str] = []
@@ -571,8 +585,12 @@ class PreMatchEngine:
         raw = self._get("fixtures", {"team": team_id, "last": 30, "status": "FT"})
 
         if raw:
-            official = [f for f in raw if not self._is_friendly_fixture(f)]
-            friendly = [f for f in raw if self._is_friendly_fixture(f)]
+            official = self._official_fixtures_newest(raw, len(raw))
+            friendly = sorted(
+                [f for f in raw if self._is_friendly_fixture(f)],
+                key=self._fixture_sort_key,
+                reverse=True,
+            )
 
             if len(official) >= 3:
                 pool = official[:10]
@@ -790,10 +808,12 @@ class PreMatchEngine:
         return not any(s in detail for s in skip)
 
     def _get_fixture_players_cached(self, fixture_id: int) -> list:
-        if fixture_id in self._fixture_players_cache:
-            return self._fixture_players_cache[fixture_id]
+        cached = self._fixture_players_cache.get(fixture_id)
+        if cached:
+            return cached
         data = self._get("fixtures/players", {"fixture": fixture_id}) or []
-        self._fixture_players_cache[fixture_id] = data
+        if data:
+            self._fixture_players_cache[fixture_id] = data
         return data
 
     def _tally_team_from_fixture_players(
@@ -880,8 +900,9 @@ class PreMatchEngine:
             tallies[key]["apps"] += 1
 
     def _get_fixture_events_cached(self, fixture_id: int) -> list:
-        if fixture_id in self._events_cache:
-            return self._events_cache[fixture_id]
+        cached = self._events_cache.get(fixture_id)
+        if cached is not None:
+            return cached
         data = self._get("fixtures/events", {"fixture": fixture_id}) or []
         self._events_cache[fixture_id] = data
         return data
@@ -997,7 +1018,7 @@ class PreMatchEngine:
         Aggregate goals + assists from recent official matches (not squad order).
         """
         raw = self._get("fixtures", {"team": team_id, "last": 30, "status": "FT"}) or []
-        official = [f for f in raw if not self._is_friendly_fixture(f)][:match_limit]
+        official = self._official_fixtures_newest(raw, match_limit)
         if not official:
             return []
 
@@ -1029,7 +1050,12 @@ class PreMatchEngine:
 
         ranked = sorted(
             tallies.items(),
-            key=lambda x: (x[1]["goals"], x[1]["assists"], x[1]["apps"]),
+            key=lambda x: (
+                x[1]["goals"],
+                x[1]["assists"],
+                x[1]["apps"],
+                x[1].get("player_id") or 0,
+            ),
             reverse=True,
         )
 
@@ -1072,30 +1098,32 @@ class PreMatchEngine:
     def _format_key_player_label(player: dict, max_goals: int, max_assists: int, tied_scorers: int = 1) -> str:
         g = player.get("goals") or 0
         a = player.get("assists") or 0
+        apps = player.get("apps") or 0
         src = player.get("source", "")
         chunks: list[str] = []
 
         if g > 0:
-            line = f"⚽ {g} гола"
-            if g == max_goals and max_goals > 0:
-                line += " — най-добър реализатор" if tied_scorers == 1 else " — в топ реализаторите"
-            chunks.append(line)
+            chunks.append(f"⚽ {g} гола")
         if a > 0:
-            line = f"🎯 {a} асист."
-            if a == max_assists and max_assists > 0 and (not g or a >= g):
-                line += " — най-много създадени положения"
-            chunks.append(line)
+            chunks.append(f"🎯 {a} асист.")
 
         if not chunks:
             return player.get("position") or "—"
 
+        stat_line = " · ".join(chunks)
         if src == "recent_matches":
             w = player.get("window_matches") or 10
-            return f"{' + '.join(chunks)} (последните {w} официални мача)"
+            played = f"в {apps} мача" if apps else ""
+            suffix = f"последни {w} офиц. мача"
+            if played:
+                return f"{stat_line} ({played} · {suffix})"
+            return f"{stat_line} ({suffix})"
         if src == "league_topscorers":
-            return f"{' + '.join(chunks)} (сезон в лигата)"
+            if apps:
+                return f"{stat_line} ({apps} мача · сезон в лигата)"
+            return f"{stat_line} (сезон в лигата)"
 
-        return " + ".join(chunks)
+        return stat_line
 
     def _resolve_team_key_players(
         self,
@@ -1495,6 +1523,14 @@ class PreMatchEngine:
             "injuries_h": len((data.get("injuries") or {}).get("home") or []),
             "injuries_a": len((data.get("injuries") or {}).get("away") or []),
             "scorers_h":  [p.get("name") for p in (data.get("top_scorers") or {}).get("home") or []],
+            "scorers_h_stats": [
+                (p.get("name"), p.get("goals"), p.get("assists"), p.get("apps"))
+                for p in ((data.get("top_scorers") or {}).get("home") or [])[:3]
+            ],
+            "scorers_a_stats": [
+                (p.get("name"), p.get("goals"), p.get("assists"), p.get("apps"))
+                for p in ((data.get("top_scorers") or {}).get("away") or [])[:3]
+            ],
         }
         raw = json.dumps(key, sort_keys=True, default=str)
         return hashlib.md5(raw.encode()).hexdigest()[:12]
