@@ -800,69 +800,6 @@ body {
     content: "💡"; flex-shrink: 0; font-size: 14px; line-height: 1.4;
 }
 
-.prediction-block {
-    display: flex; gap: 10px; align-items: stretch;
-}
-.pred-item {
-    flex: 1; padding: 12px;
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 10px; text-align: center;
-}
-.pred-label { font-size: 17px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px; }
-.pred-value { font-size: 22px; font-weight: 800; }
-.pred-home .pred-value { color: var(--green); }
-.pred-draw .pred-value { color: var(--muted); }
-.pred-away .pred-value { color: var(--blue); }
-.pred-score {
-    flex: 1.5; padding: 12px;
-    background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.3);
-    border-radius: 10px; text-align: center;
-}
-.pred-score .pred-label { color: var(--purple); }
-.pred-score .pred-value { font-size: 26px; color: var(--purple); }
-
-/* ===== BETTING MARKETS ===== */
-.bet-markets-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 8px;
-}
-.bet-market {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 12px;
-}
-.bet-market-title {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: .6px;
-    color: var(--muted);
-    margin-bottom: 7px;
-    font-weight: 600;
-}
-.bet-market-row {
-    display: flex;
-    gap: 6px;
-}
-.bet-opt {
-    flex: 1;
-    text-align: center;
-    padding: 5px 4px;
-    border-radius: 6px;
-    font-size: 14px;
-    font-weight: 700;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    transition: all .2s;
-}
-.bet-hot {
-    background: rgba(0,255,153,0.1);
-    border-color: rgba(0,255,153,0.4);
-    color: var(--green);
-}
-
 .gpt-narrative-block {
     font-size: 17px; line-height: 1.7; color: var(--text);
     padding: 14px 16px;
@@ -1414,12 +1351,6 @@ body {
         <div class="card-label"><span class="dot"></span> Живи обновления</div>
         <div class="narrative-minute" id="narrative-minute"></div>
         <div class="narrative-live" id="narrative-text"></div>
-    </div>
-
-    <!-- WIN PROBABILITY (live) -->
-    <div class="card" id="card-win-prob" style="display:none">
-        <div class="card-label"><span class="dot" style="background:var(--purple)"></span> Моделна вероятност (live)</div>
-        <div id="win-prob-body"></div>
     </div>
 
     <!-- POST-MATCH SUMMARY -->
@@ -2658,8 +2589,9 @@ const SECTION_ICONS = {
     "ГОВОРНИ":       "💬",
     "ИСТОРИЧЕСКИ":   "📜",
     "ОЧАКВАНЕ":      "👁️",
-    "ПРОГНОЗА":      "🔮",
 };
+
+const SKIP_GUIDE_SECTIONS = ["ПРОГНОЗА"];
 
 function getSectionIcon(title) {
     for (const [key, icon] of Object.entries(SECTION_ICONS)) {
@@ -2708,6 +2640,7 @@ function renderBroadcastGuide(narrative, home, away) {
     return sections.map((section, idx) => {
         const firstNewline = section.indexOf("\n");
         const rawTitle  = firstNewline > 0 ? section.slice(0, firstNewline).replace(/^## /, "").trim() : section.trim();
+        if (SKIP_GUIDE_SECTIONS.some(s => rawTitle.toUpperCase().includes(s))) return "";
         const body      = firstNewline > 0 ? section.slice(firstNewline + 1).trim() : "";
         const icon      = getSectionIcon(rawTitle);
 
@@ -2895,59 +2828,6 @@ function renderCommentaryQueue(data) {
             </div>`;
         }).join("");
     }
-
-    if (card) card.style.display = "block";
-}
-
-/* =========================================================
-   LIVE WIN PROBABILITY
-   ========================================================= */
-function renderWinProbability(data) {
-    const wp    = data.win_probability || {};
-    const card  = document.getElementById("card-win-prob");
-    const phase = data.phase || "";
-    const home  = data.match?.home || "Домакин";
-    const away  = data.match?.away || "Гост";
-
-    if (!wp.is_live_calc || phase === "prematch") {
-        if (card) card.style.display = "none";
-        return;
-    }
-
-    const hw = wp.home_win_pct || 0;
-    const dp = wp.draw_pct     || 0;
-    const aw = wp.away_win_pct || 0;
-    const rem = wp.minutes_remaining || 0;
-
-    const body = document.getElementById("win-prob-body");
-    if (!body) return;
-
-    body.innerHTML = `
-        <div style="margin-bottom:10px">
-            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
-                <span style="font-weight:700;color:var(--green)">${home}</span>
-                <span style="color:var(--muted)">${rem > 0 ? rem+"' остават" : "Финал"}</span>
-                <span style="font-weight:700;color:var(--blue)">${away}</span>
-            </div>
-            <!-- 3-way probability bar -->
-            <div style="display:flex;height:28px;border-radius:8px;overflow:hidden;gap:2px">
-                <div style="flex:${hw};background:var(--green);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#000;transition:flex 0.8s ease;min-width:${hw>5?'auto':'0'}">
-                    ${hw >= 8 ? hw+"%" : ""}
-                </div>
-                <div style="flex:${dp};background:var(--yellow,#eab308);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#000;transition:flex 0.8s ease;min-width:${dp>5?'auto':'0'}">
-                    ${dp >= 8 ? dp+"%" : ""}
-                </div>
-                <div style="flex:${aw};background:var(--blue);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#000;transition:flex 0.8s ease;min-width:${aw>5?'auto':'0'}">
-                    ${aw >= 8 ? aw+"%" : ""}
-                </div>
-            </div>
-            <!-- Labels under bar -->
-            <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:12px">
-                <div style="color:var(--green);font-weight:700">${hw}% победа</div>
-                <div style="color:var(--yellow,#eab308);font-weight:700">${dp}% равен</div>
-                <div style="color:var(--blue);font-weight:700">${aw}% победа</div>
-            </div>
-        </div>`;
 
     if (card) card.style.display = "block";
 }
@@ -3154,7 +3034,7 @@ function renderPrematch(data) {
     }
 
     // Skip full re-render if prematch data hasn't changed (prevents flicker)
-    const renderKey = `${home}|${away}|${pm.home_form}|${pm.away_form}|${pm.prediction?.home_win_pct}|${pm.fingerprint}|${(pm.gpt_narrative||"").length}|${(pm.broadcast_guide_draft||"").length}|${pm.gpt_guide_pending}|${pm.h2h_latest_scorers}|${(pm.stream_facts||[]).join("|")}|${pm.stream_facts_gpt_pending}`;
+    const renderKey = `${home}|${away}|${pm.home_form}|${pm.away_form}|${pm.fingerprint}|${(pm.gpt_narrative||"").length}|${(pm.broadcast_guide_draft||"").length}|${pm.gpt_guide_pending}|${pm.h2h_latest_scorers}|${(pm.stream_facts||[]).join("|")}|${pm.stream_facts_gpt_pending}`;
     if (_prematchRenderedKey === renderKey) return;
     _prematchRenderedKey = renderKey;
 
@@ -3168,7 +3048,6 @@ function renderPrematch(data) {
     const as_ = pm.away_stats  || {};
     const hst = pm.home_standing || {};
     const ast = pm.away_standing || {};
-    const pred = pm.prediction  || {};
 
     // Build form dots
     function formDots(formStr) {
@@ -3381,93 +3260,6 @@ function renderPrematch(data) {
         </div>`;
         })()}
 
-        <!-- Prediction -->
-        ${pred.home_win_pct !== undefined ? `
-        <div>
-            <div class="card-label" style="margin-bottom:4px"><span class="dot"></span> Статистическа оценка (1X2)</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.4">
-                ${pred.source_label || "Вътрешен модел — не е съвет за залагане"}
-            </div>
-
-            <!-- 1X2 + Score -->
-            <div class="prediction-block" style="margin-bottom:10px">
-                <div class="pred-item pred-home">
-                    <div class="pred-label">${home.split(' ').slice(-1)[0]}</div>
-                    <div class="pred-value">${pred.home_win_pct}%</div>
-                </div>
-                <div class="pred-item pred-draw">
-                    <div class="pred-label">Равен</div>
-                    <div class="pred-value">${pred.draw_pct}%</div>
-                </div>
-                <div class="pred-item pred-away">
-                    <div class="pred-label">${away.split(' ').slice(-1)[0]}</div>
-                    <div class="pred-value">${pred.away_win_pct}%</div>
-                </div>
-            </div>
-
-            <!-- Scores row -->
-            <div style="display:flex;gap:8px;margin-bottom:10px">
-                <div class="pred-score" style="flex:1">
-                    <div class="pred-label">Вероятен резултат</div>
-                    <div class="pred-value">${pred.likely_score || '—'}</div>
-                </div>
-                <div class="pred-score" style="flex:1;background:rgba(77,159,255,0.08);border-color:rgba(77,159,255,0.3)">
-                    <div class="pred-label" style="color:var(--blue)">Алтернатива</div>
-                    <div class="pred-value" style="color:var(--blue);font-size:22px">${pred.alt_score || '—'}</div>
-                </div>
-                ${pred.exp_goals !== undefined ? `
-                <div class="pred-score" style="flex:1;background:rgba(255,200,60,0.08);border-color:rgba(255,200,60,0.3)">
-                    <div class="pred-label" style="color:var(--yellow)">Очак. голове</div>
-                    <div class="pred-value" style="color:var(--yellow);font-size:22px">${pred.exp_goals}</div>
-                </div>` : ''}
-            </div>
-
-            <!-- Betting markets grid -->
-            <div class="bet-markets-grid">
-                <div class="bet-market">
-                    <div class="bet-market-title">Над 2.5 гола</div>
-                    <div class="bet-market-row">
-                        <span class="bet-opt ${pred.over25_pct >= 55 ? 'bet-hot' : ''}">Над ${pred.over25_pct}%</span>
-                        <span class="bet-opt ${pred.under25_pct >= 55 ? 'bet-hot' : ''}">Под ${pred.under25_pct}%</span>
-                    </div>
-                </div>
-                <div class="bet-market">
-                    <div class="bet-market-title">Над 1.5 гола</div>
-                    <div class="bet-market-row">
-                        <span class="bet-opt ${pred.over15_pct >= 65 ? 'bet-hot' : ''}">Над ${pred.over15_pct}%</span>
-                        <span class="bet-opt ${pred.under15_pct >= 55 ? 'bet-hot' : ''}">Под ${pred.under15_pct}%</span>
-                    </div>
-                </div>
-                <div class="bet-market">
-                    <div class="bet-market-title">Над 3.5 гола</div>
-                    <div class="bet-market-row">
-                        <span class="bet-opt ${pred.over35_pct >= 40 ? 'bet-hot' : ''}">Над ${pred.over35_pct}%</span>
-                        <span class="bet-opt ${(100-pred.over35_pct) >= 65 ? 'bet-hot' : ''}">Под ${100 - pred.over35_pct}%</span>
-                    </div>
-                </div>
-                <div class="bet-market">
-                    <div class="bet-market-title">И двата отбора</div>
-                    <div class="bet-market-row">
-                        <span class="bet-opt ${pred.btts_pct >= 55 ? 'bet-hot' : ''}">Да ${pred.btts_pct}%</span>
-                        <span class="bet-opt ${pred.btts_no_pct >= 55 ? 'bet-hot' : ''}">Не ${pred.btts_no_pct}%</span>
-                    </div>
-                </div>
-                <div class="bet-market">
-                    <div class="bet-market-title">Чиста мрежа ${home.split(' ').slice(-1)[0]}</div>
-                    <div class="bet-market-row">
-                        <span class="bet-opt ${pred.cs_home_pct >= 30 ? 'bet-hot' : ''}">Да ${pred.cs_home_pct}%</span>
-                        <span class="bet-opt">${100 - pred.cs_home_pct}% Не</span>
-                    </div>
-                </div>
-                <div class="bet-market">
-                    <div class="bet-market-title">Чиста мрежа ${away.split(' ').slice(-1)[0]}</div>
-                    <div class="bet-market-row">
-                        <span class="bet-opt ${pred.cs_away_pct >= 30 ? 'bet-hot' : ''}">Да ${pred.cs_away_pct}%</span>
-                        <span class="bet-opt">${100 - pred.cs_away_pct}% Не</span>
-                    </div>
-                </div>
-            </div>
-        </div>` : ''}
     `;
 
     // Update accordion height
@@ -3479,8 +3271,8 @@ function renderPrematch(data) {
    PHASE-AWARE CARD VISIBILITY
    ========================================================= */
 function showCardsForPhase(phase) {
-    const liveCards     = ["card-momentum","card-moments","card-tactical","card-stats","card-events","card-narrative","card-table-impact","card-win-prob","card-commentary","card-lineups","card-stream-facts"];
-    const finishedCards = ["card-postmatch","card-win-prob","card-stats","card-events","card-lineups"];
+    const liveCards     = ["card-momentum","card-moments","card-tactical","card-stats","card-events","card-narrative","card-table-impact","card-commentary","card-lineups","card-stream-facts"];
+    const finishedCards = ["card-postmatch","card-stats","card-events","card-lineups"];
     const prematchCards = ["card-prematch","card-lineups","card-stream-facts"];
 
     document.getElementById("card-header").style.display  = "block";
@@ -3551,7 +3343,6 @@ function update(data) {
         renderLiveNarrative(data);
         renderHalftimeAnalysis(data);
         renderTableImpact(data);
-        renderWinProbability(data);
         renderPostmatch(data);
         renderCommentaryQueue(data);
         renderMomentum(data);

@@ -241,12 +241,13 @@ function extractTalkingPoints(narrative) {
 
 function extractGuideSections(narrative) {
     if (!narrative) return [];
+    const skip = ["ПРОГНОЗА"];
     return narrative.split(/\n## /).filter(Boolean).map(block => {
         const nl = block.indexOf("\n");
         const title = (nl > 0 ? block.slice(0, nl) : block).replace(/^## /, "").trim();
         const body  = nl > 0 ? block.slice(nl + 1).trim() : "";
         return { title, body };
-    });
+    }).filter(s => !skip.some(k => s.title.toUpperCase().includes(k)));
 }
 
 function renderBroadcastStatsTableLg(table) {

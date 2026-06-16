@@ -226,7 +226,6 @@ class PreMatchEngine:
         as_    = data.get("away_stats") or {}
         hst    = data.get("home_standing") or {}
         ast    = data.get("away_standing") or {}
-        pred   = data.get("prediction") or {}
         coaches = data.get("coaches") or {}
         referee = data.get("referee") or {}
         injuries = data.get("injuries") or {}
@@ -288,15 +287,6 @@ class PreMatchEngine:
             avg_c = float(stats.get("avg_conc") or 0)
             if avg_c <= 0.8 and (stats.get("played") or 0) >= 3:
                 facts.append(f"{team} допуска само {avg_c:.1f} гола на мач — стабилна отбрана")
-
-        btts = pred.get("btts_pct")
-        over25 = pred.get("over25_pct")
-        if btts and btts >= 60:
-            facts.append(f"Статистически модел: {btts}% шанс и двата отбора да вкарят")
-        if over25 and over25 >= 65:
-            facts.append(f"Моделът дава {over25}% за над 2.5 гола — потенциално открит мач")
-        elif over25 and over25 <= 35:
-            facts.append(f"Само {over25}% за над 2.5 гола по модела — вероятно затегната среща")
 
         ch, ca = coaches.get("home"), coaches.get("away")
         if ch and ca:
@@ -1490,12 +1480,8 @@ class PreMatchEngine:
         """Stable hash of key prematch fields — used to detect stale client cache."""
         if not data:
             return ""
-        pred = data.get("prediction") or {}
         latest_h2h = (data.get("h2h_raw") or [{}])[0] if data.get("h2h_raw") else {}
         key = {
-            "home_win":   pred.get("home_win_pct"),
-            "draw":       pred.get("draw_pct"),
-            "away_win":   pred.get("away_win_pct"),
             "h2h_count":  data.get("h2h_count"),
             "h2h_latest": {
                 "date":  latest_h2h.get("date"),
@@ -1648,61 +1634,6 @@ class PreMatchEngine:
         if not key_factors:
             key_factors = ["Статистически данни не са налични за тази лига в момента"]
 
-        # Prediction (weighted: form points + standings + home advantage)
-        h_pts   = hs.get("wins", 0) * 3 + hs.get("draws", 0)
-        a_pts   = as_.get("wins", 0) * 3 + as_.get("draws", 0)
-        h_pos   = h_stand.get("position", 10) or 10 if _standings_meaningful(h_stand) else 10
-        a_pos   = a_stand.get("position", 10) or 10 if _standings_meaningful(a_stand) else 10
-        pos_bonus_h = max(0, a_pos - h_pos) * 0.5 if standings_reliable else 0
-        pos_bonus_a = max(0, h_pos - a_pos) * 0.5 if standings_reliable else 0
-        # Home advantage bonus (5 pts) + better position bonus (only when table is live)
-        h_score = h_pts + 5 + pos_bonus_h
-        a_score = a_pts + pos_bonus_a
-
-        total = h_score + a_score
-        if total < 5:
-            # Not enough data — use balanced defaults
-            home_win_pct, away_win_pct, draw_pct = 40, 30, 30
-        else:
-            home_win_pct = round(h_score / (total + h_score * 0.3) * 100)
-            away_win_pct = round(a_score / (total + a_score * 0.3) * 100)
-            draw_pct     = max(5, 100 - home_win_pct - away_win_pct)
-
-        # Score prediction
-        h_avg    = float(hs.get("avg_score") or 1.3)
-        a_avg    = float(as_.get("avg_score") or 1.0)
-        pred_home = max(1, round(h_avg * 0.85))
-        pred_away = max(0, round(a_avg * 0.85))
-
-        # Betting markets — based on Poisson approximation and form data
-        import math
-        exp_goals = h_avg + a_avg   # expected total goals
-
-        # Over/Under 2.5
-        # P(goals >= 3) from Poisson: 1 - P(0) - P(1) - P(2)
-        def _poisson_under(lam, k):
-            return sum(math.exp(-lam) * lam**i / math.factorial(i) for i in range(k+1))
-        over25_pct  = round((1 - _poisson_under(exp_goals, 2)) * 100)
-        under25_pct = 100 - over25_pct
-        over15_pct  = round((1 - _poisson_under(exp_goals, 1)) * 100)
-        under15_pct = 100 - over15_pct
-        over35_pct  = round((1 - _poisson_under(exp_goals, 3)) * 100)
-
-        # BTTS — P(home scores >= 1) * P(away scores >= 1)
-        p_home_scores = round((1 - math.exp(-h_avg)) * 100)
-        p_away_scores = round((1 - math.exp(-a_avg)) * 100)
-        btts_pct      = round(p_home_scores * p_away_scores / 100)
-
-        # Clean sheets
-        cs_home_pct = round(math.exp(-a_avg) * 100)   # P(away scores 0)
-        cs_away_pct = round(math.exp(-h_avg) * 100)   # P(home scores 0)
-
-        # Alternative score (2nd most likely scenario)
-        alt_home = pred_home + (1 if pred_away == 0 else 0)
-        alt_away = pred_away + (0 if pred_home > pred_away else 1)
-        if f"{alt_home}:{alt_away}" == f"{pred_home}:{pred_away}":
-            alt_away = pred_away + 1
-
         return {
             "home":           home,
             "away":           away,
@@ -1728,25 +1659,6 @@ class PreMatchEngine:
             "home_advantages": home_advantages,
             "away_advantages": away_advantages,
             "key_factors":    key_factors,
-            "prediction": {
-                "home_win_pct":  home_win_pct,
-                "away_win_pct":  away_win_pct,
-                "draw_pct":      draw_pct,
-                "likely_score":  f"{pred_home}:{pred_away}",
-                "alt_score":     f"{alt_home}:{alt_away}",
-                "over25_pct":    over25_pct,
-                "under25_pct":   under25_pct,
-                "over15_pct":    over15_pct,
-                "under15_pct":   under15_pct,
-                "over35_pct":    over35_pct,
-                "btts_pct":      btts_pct,
-                "btts_no_pct":   100 - btts_pct,
-                "cs_home_pct":   cs_home_pct,
-                "cs_away_pct":   cs_away_pct,
-                "exp_goals":     round(exp_goals, 2),
-                "source":        "statistical_model",
-                "source_label":  "Статистически модел (форма + класиране + Poisson) — не е съвет за залагане",
-            },
             "gpt_narrative":  "",   # populated if GPT available
             "top_scorers":    top_scorers or {"home": [], "away": []},
             "coaches":        coaches or {},
@@ -1769,7 +1681,6 @@ class PreMatchEngine:
         as_    = data.get("away_stats") or {}
         hst    = data.get("home_standing") or {}
         ast    = data.get("away_standing") or {}
-        pred   = data.get("prediction") or {}
         coaches = data.get("coaches") or {}
 
         def _form_block(team: str, stats: dict) -> str:
@@ -1847,11 +1758,13 @@ class PreMatchEngine:
             f"Класиране: {home} — {h_rank}; {away} — {a_rank}.{scenario_bit}"
         )
 
-        winner = home if (pred.get("home_win_pct") or 0) >= max(
-            pred.get("draw_pct") or 0, pred.get("away_win_pct") or 0,
-        ) else (
-            away if (pred.get("away_win_pct") or 0) >= (pred.get("draw_pct") or 0) else "Равен"
-        )
+        expect_bits = []
+        if (hs.get("avg_score") or 0) > 0 or (as_.get("avg_score") or 0) > 0:
+            expect_bits.append(
+                f"Средно голове в последните мачове: {home} "
+                f"{hs.get('avg_score', '—')}/мач, {away} {as_.get('avg_score', '—')}/мач."
+            )
+        expect_text = " ".join(expect_bits) if expect_bits else "Виж формата и H2H по-горе за контекст на стила и темпа."
 
         return f"""## УВОД ЗА СТРИЙМА
 {intro}
@@ -1883,14 +1796,7 @@ class PreMatchEngine:
 {chr(10).join(h2h_lines)}
 
 ## ОЧАКВАНЕ ЗА МАЧА
-Очаквани общо голове (статистически модел): {pred.get('exp_goals', '—')}.
-Моделът дава {pred.get('home_win_pct', '—')}% / {pred.get('draw_pct', '—')}% / {pred.get('away_win_pct', '—')}% за 1/X/2.
-
-## ПРОГНОЗА
-Победител (модел): {winner}
-Вероятен резултат: {pred.get('likely_score', '—')}
-Алтернатива: {pred.get('alt_score', '—')}
-Над 2.5 гола: {pred.get('over25_pct', '—')}% · И двата отбора: {pred.get('btts_pct', '—')}%"""
+{expect_text}"""
 
     def _finalize_prematch_data(self, data: dict, fixture_id=None) -> dict:
         data["analyzed_at"] = datetime.now(timezone.utc).isoformat()
@@ -2069,6 +1975,7 @@ H2H — последни срещи:
 3. Не споменавай играчи, освен ако са изрично дадени по-горе
 4. Цитирай КОНКРЕТНИ числа от данните — не пиши общи фрази
 5. Пиши богато и детайлно — аудиторията ще чете по време на ЦЕЛИЯ мач
+6. НЕ давай прогноза за резултат, победител или проценти за 1/X/2 — фокусът е stream анализ, не залози
 ═══════════════════════════════════════
 
 Напиши ПЪЛЕН BROADCAST GUIDE точно по тази структура (без да пропускаш секции):
@@ -2111,15 +2018,7 @@ H2H — последни срещи:
 (До 5 конкретни факта от H2H и статистиката — само реални данни. Ако липсват — по-малко факта, без измисляне.)
 
 ## ОЧАКВАНЕ ЗА МАЧА
-(2 параграфа — очакван темп, стил на игра, кога да се очакват голове, дали очакваш отворен/затворен мач, какви моменти може да са ключови)
-
-## ПРОГНОЗА
-Победител: [отбор или равен]
-Вероятен резултат: X:X
-Алтернативен сценарий: X:X (ако мачът се развие по-различно)
-И двата отбора да вкарат: [Да/Не]
-Над 2.5 гола: [Вероятно/Малко вероятно]
-Мотивация: (2-3 изречения с конкретни аргументи от данните защо)"""
+(2 параграфа — очакван темп, стил на игра, кога може да се очакват голове, дали очакваш отворен/затворен мач, какви моменти може да са ключови — БЕЗ прогноза за резултат или проценти)"""
 
         try:
             resp = _gpt_client.chat.completions.create(
@@ -2538,17 +2437,9 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
                 f"{_evt_player(c)} ({_evt_detail(c)}) {_evt_minute(c)}'" for c in clist
             ) or "—"
 
-        # Pre-match prediction context
-        pred_ctx = ""
-        if prematch_data:
-            pred = prematch_data.get("prediction", {})
-            if pred.get("likely_score"):
-                pred_ctx = f"\nПРЕДМАЧОВА ПРОГНОЗА: {pred['likely_score']}"
-
         prompt = f"""Ти си водещ спортен анализатор за стрийм предаване. Пишеш САМО на Български. Стилът е ТВ-готов, конкретен и ангажиращ.
 
 МАЧ ПРИКЛЮЧИ: {home} {score_home}:{score_away} {away}
-{pred_ctx}
 
 ФИНАЛНА СТАТИСТИКА:
 {home}: {hs.get('shots_total',0)} удара ({hs.get('shots_on_target',0)} в рамките) | xG: {hs.get('xg','—')} | Владение: {hs.get('possession',0)}% | Ъглови: {hs.get('corners',0)} | Пасове: {hs.get('passes_accurate','—')}/{hs.get('passes_total','—')}
@@ -2633,15 +2524,9 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         else:
             outcome = f"Равенство {score_home}:{score_away}."
 
-        pred_note = ""
-        if prematch_data:
-            pred = prematch_data.get("prediction", {})
-            if pred.get("likely_score"):
-                pred_note = f" Предмачовата прогноза беше {pred['likely_score']}."
-
         lines = [
             "## КАК ЗАВЪРШИ МАЧЪТ?",
-            f"{home} {score_home}:{score_away} {away}. {outcome}{pred_note}",
+            f"{home} {score_home}:{score_away} {away}. {outcome}",
             "",
             "## СТАТИСТИКА",
             f"{home}: {h_shots} удара ({hs.get('shots_on_target', 0)} в рамките), xG {h_xg if h_xg is not None else '—'}, {h_pos}% владение, {hs.get('corners', 0)} ъглови",

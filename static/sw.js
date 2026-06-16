@@ -1,4 +1,4 @@
-const CACHE = "sport-assistant-static-v19";
+const CACHE = "sport-assistant-static-v21";
 const ASSETS = [
   "/static/tablet.css",
   "/static/responsive.css",

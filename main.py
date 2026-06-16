@@ -26,8 +26,7 @@ from data.director.tactical_engine import TacticalEngine
 # Phase 2 — Pre-Match Editorial + Live Narrative
 from data.director.prematch_engine import PreMatchEngine, _is_live, _is_ns, _gpt_available
 
-# Phase 3 — Live Win Probability
-from data.director.win_probability import calculate as calc_win_prob
+# Phase 3 — Live Win Probability (removed from UI — stream-only assistant)
 from data.director.broadcast_package import build_halftime_package, build_fulltime_package
 
 
@@ -583,27 +582,8 @@ def build_overlay_response(
     live_hg = live_fixture.get("home_goals")
     live_ag = live_fixture.get("away_goals")
 
-    # --- Live win probability ---
+    # --- Live win probability (disabled) ---
     win_prob = {}
-    pm_pred = pm_data.get("prediction", {})
-    if (
-        real_available
-        and match_phase in ("live", "finished")
-        and live_hg is not None
-        and live_ag is not None
-    ):
-        home_xg_val = float(stats.get("home", {}).get("xg", 0) or 0)
-        away_xg_val = float(stats.get("away", {}).get("xg", 0) or 0)
-        win_prob = calc_win_prob(
-            home_goals  = int(live_hg or 0),
-            away_goals  = int(live_ag or 0),
-            minute      = minute,
-            pre_home_win= float(pm_pred.get("home_win_pct", 40) or 40),
-            pre_draw    = float(pm_pred.get("draw_pct", 25)     or 25),
-            pre_away_win= float(pm_pred.get("away_win_pct", 35) or 35),
-            home_xg     = home_xg_val,
-            away_xg     = away_xg_val,
-        )
 
     # --- Live table impact (calculated when score is available) ---
     table_impact = {}
@@ -754,7 +734,6 @@ def build_overlay_response(
             "h2h_latest_scorers": pm_data.get("h2h_latest_scorers", ""),
             "standings_reliable": pm_data.get("standings_reliable", False),
             "group_scenarios": pm_data.get("group_scenarios", {}),
-            "prediction":      pm_data.get("prediction", {}),
             "gpt_narrative":   pm_data.get("gpt_narrative", ""),
             "top_scorers":     pm_data.get("top_scorers", {"home": [], "away": []}),
             "coaches":         pm_data.get("coaches", {}),
@@ -769,7 +748,6 @@ def build_overlay_response(
         },
 
         "table_impact":      table_impact,
-        "win_probability":   win_prob,
         "postmatch_summary": postmatch_summary,
         "postmatch_gpt_pending": postmatch_gpt_pending,
         "commentary_queue":  [],   # filled by loop
@@ -1015,7 +993,6 @@ def debug_prematch(fixture_id: int):
         "away":          data.get("away"),
         "home_form":     data.get("home_form"),
         "away_form":     data.get("away_form"),
-        "prediction":    data.get("prediction"),
         "h2h_count":     len(data.get("h2h", [])),
     }
 
