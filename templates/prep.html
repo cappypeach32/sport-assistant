@@ -163,6 +163,66 @@ a { color: var(--blue); text-decoration: none; font-weight: 600; }
     border-radius: 10px; padding: 12px 14px; margin: 10px 0; overflow-x: auto;
     white-space: pre;
 }
+.formations-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 4px;
+}
+@media (max-width: 800px) { .formations-grid { grid-template-columns: 1fr; } }
+.formation-team-card {
+    background: var(--surface2); border-radius: 14px;
+    border: 1px solid var(--border); overflow: hidden;
+}
+.formation-team-card .ed-sub { margin: 0; padding: 12px 14px 8px; }
+.formation-scheme-badge {
+    display: inline-block; font-size: 0.72rem; font-weight: 800;
+    padding: 4px 11px; border-radius: 999px; margin: 0 14px 10px;
+    background: rgba(0,255,153,0.14); color: var(--green);
+    border: 1px solid rgba(0,255,153,0.28); letter-spacing: 0.04em;
+}
+.pitch {
+    position: relative; min-height: 300px; margin: 0 10px 12px;
+    padding: 14px 10px 16px;
+    background: linear-gradient(165deg, #1e6b42 0%, #155a36 45%, #1a4d32 100%);
+    border-radius: 10px;
+    display: flex; flex-direction: column; justify-content: space-between; gap: 4px;
+    box-shadow: inset 0 0 40px rgba(0,0,0,0.25);
+}
+.pitch-markings {
+    position: absolute; inset: 10px; border: 2px solid rgba(255,255,255,0.22);
+    border-radius: 6px; pointer-events: none;
+}
+.pitch-markings::before {
+    content: ""; position: absolute; top: 50%; left: 0; right: 0; height: 2px;
+    background: rgba(255,255,255,0.18); transform: translateY(-50%);
+}
+.pitch-markings::after {
+    content: ""; position: absolute; top: 50%; left: 50%; width: 56px; height: 56px;
+    border: 2px solid rgba(255,255,255,0.18); border-radius: 50%;
+    transform: translate(-50%, -50%);
+}
+.pitch-row {
+    position: relative; z-index: 1;
+    display: flex; justify-content: center; align-items: center;
+    flex-wrap: wrap; gap: 6px 8px; min-height: 2rem;
+}
+.pitch-player {
+    font-size: 0.65rem; font-weight: 700; line-height: 1.15; text-align: center;
+    padding: 5px 7px; min-width: 52px; max-width: 92px;
+    border-radius: 8px;
+    background: rgba(5,6,10,0.82); color: #f0f4f8;
+    border: 1px solid rgba(255,255,255,0.14);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    word-break: break-word;
+}
+.pitch-player.gk {
+    background: rgba(234,179,8,0.22); border-color: rgba(234,179,8,0.45); color: #fde68a;
+}
+.formation-tactics {
+    padding: 10px 14px 14px; font-size: 0.86rem; line-height: 1.5;
+    border-top: 1px solid var(--border); color: var(--muted);
+}
+.formation-tactics strong { color: var(--text); font-size: 0.8rem; }
+.formation-tactics ul { margin: 6px 0 0; padding-left: 1.15rem; }
+.formation-tactics li { margin: 4px 0; color: var(--text); }
 .draft-badge {
     display: inline-block; font-size: 0.7rem; font-weight: 800;
     padding: 3px 8px; border-radius: 6px; margin-left: 8px;
@@ -362,6 +422,122 @@ function formatInline(s) {
     return e;
 }
 
+function stripCodeFences(text) {
+    return (text || "").replace(/```[\w]*\n?/g, "").trim();
+}
+
+function extractPlayersFromLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed || /[а-яА-ЯЁё]/.test(trimmed)) return [];
+    if (/^(основна|тактическ|вероятна|схема|идея)/i.test(trimmed)) return [];
+
+    let parts = trimmed.split(/\s{2,}|\t+/).map(s => s.trim()).filter(Boolean);
+    if (parts.length <= 1) {
+        const words = trimmed.split(/\s+/).filter(Boolean);
+        const nameLike = words.filter(w => /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\.\-'']{1,}$/.test(w));
+        if (nameLike.length >= 2 && nameLike.length <= 7) parts = nameLike;
+    }
+    return parts.filter(p => p.length > 1 && p.length < 40 && !/^\d+$/.test(p));
+}
+
+function parseFormationContent(text) {
+    const raw = stripCodeFences(text);
+    let scheme = "";
+    const rows = [];
+    const tactics = [];
+    let inTactics = false;
+
+    for (const line of raw.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+
+        const schemeM = t.match(/(?:вероятна\s+)?схема\s*:?\s*([\d]+(?:\s*[-/]\s*[\d]+)+)/i);
+        if (schemeM) {
+            scheme = schemeM[1].replace(/\s/g, "");
+            continue;
+        }
+
+        if (/^основна\s+тактическ/i.test(t)) {
+            inTactics = true;
+            continue;
+        }
+
+        if (/^[•\-\*]\s+/.test(t) || (inTactics && /[а-яА-Я]/.test(t))) {
+            tactics.push(t.replace(/^[•\-\*]\s+/, ""));
+            inTactics = true;
+            continue;
+        }
+
+        const players = extractPlayersFromLine(t);
+        if (players.length) {
+            rows.push(players);
+            inTactics = false;
+        }
+    }
+    return { scheme, rows, tactics };
+}
+
+function renderFormationPitch(rows) {
+    if (!rows?.length) return "";
+    const lastRow = rows[rows.length - 1];
+    return `<div class="pitch">
+        <div class="pitch-markings"></div>
+        ${rows.map((row, ri) => {
+            const isGkRow = ri === rows.length - 1 && row.length === 1;
+            return `<div class="pitch-row">${row.map((name, pi) => {
+                const gk = isGkRow || (ri === rows.length - 1 && pi === 0 && row.length <= 2 && /land|keeper|goal/i.test(name));
+                return `<span class="pitch-player${gk ? " gk" : ""}">${esc(name)}</span>`;
+            }).join("")}</div>`;
+        }).join("")}
+    </div>`;
+}
+
+function renderFormationHTML(parsed) {
+    if (!parsed.rows?.length) return "";
+    let html = "";
+    if (parsed.scheme) {
+        html += `<div class="formation-scheme-badge">${esc(parsed.scheme)}</div>`;
+    }
+    html += renderFormationPitch(parsed.rows);
+    if (parsed.tactics?.length) {
+        html += `<div class="formation-tactics"><strong>Тактическа идея</strong><ul>
+            ${parsed.tactics.map(t => `<li>${formatInline(t)}</li>`).join("")}
+        </ul></div>`;
+    }
+    return html;
+}
+
+function tryRenderFormation(text) {
+    const parsed = parseFormationContent(text);
+    const playerCount = parsed.rows.reduce((n, r) => n + r.length, 0);
+    if (parsed.rows.length < 1 || playerCount < 3) return null;
+    return renderFormationHTML(parsed);
+}
+
+function renderFormationsSection(body) {
+    const chunks = body.split(/(?=^### )/m).filter(c => c.trim());
+    if (!chunks.length) return formatEditorialBody(body);
+
+    const cards = chunks.map(chunk => {
+        chunk = chunk.trim();
+        let teamName = "";
+        let rest = chunk;
+        if (chunk.startsWith("### ")) {
+            const nl = chunk.indexOf("\n");
+            teamName = nl > 0 ? chunk.slice(4, nl).trim() : chunk.slice(4).trim();
+            rest = nl > 0 ? chunk.slice(nl + 1) : "";
+        }
+        const formationHtml = tryRenderFormation(rest);
+        const extra = formationHtml ? "" : formatParagraphs(rest);
+        return `<div class="formation-team-card">
+            ${teamName ? `<h4 class="ed-sub">${esc(teamName)}</h4>` : ""}
+            ${formationHtml || extra}
+        </div>`;
+    }).join("");
+
+    return `<div class="formations-grid">${cards}</div>`;
+}
+
 function looksLikeDiagramBlock(text) {
     const lines = text.split("\n").filter(l => l.trim());
     if (lines.length < 2) return false;
@@ -376,8 +552,12 @@ function formatParagraphs(text) {
     return text.split(/\n\n+/).map(p => {
         p = p.trim();
         if (!p) return "";
+        const formationHtml = tryRenderFormation(p);
+        if (formationHtml) return formationHtml;
         if (looksLikeDiagramBlock(p)) {
-            return `<pre class="ed-diagram">${esc(p)}</pre>`;
+            const parsed = parseFormationContent(p);
+            if (parsed.rows.length) return renderFormationHTML(parsed);
+            return `<pre class="ed-diagram">${esc(stripCodeFences(p))}</pre>`;
         }
         const lines = p.split("\n").map(l => {
             const t = l.trim();
@@ -417,6 +597,13 @@ function renderEditorialSections(prep) {
         const extra = titleUp === "АНАЛИЗ И ОЧАКВАН СЦЕНАРИЙ" ? " highlight" : "";
         if (titleUp === "УВОД") {
             html += `<div class="editorial-hero">${formatEditorialBody(sec.body)}</div>`;
+            continue;
+        }
+        if (titleUp === "ВЕРОЯТНИ СХЕМИ") {
+            html += `<div class="editorial-section${extra}">
+                <div class="editorial-title">${sec.icon || "📄"} ${esc(sec.title)}</div>
+                ${renderFormationsSection(sec.body)}
+            </div>`;
             continue;
         }
         html += `<div class="editorial-section${extra}">
