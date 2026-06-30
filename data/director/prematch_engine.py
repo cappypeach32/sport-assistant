@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
@@ -23,7 +24,7 @@ _gpt_available = bool(
 if _gpt_available:
     try:
         from openai import OpenAI
-        _gpt_client = OpenAI(api_key=_openai_key)
+        _gpt_client = OpenAI(api_key=_openai_key, timeout=75.0, max_retries=1)
     except Exception:
         _gpt_available = False
         _gpt_client = None
@@ -33,6 +34,7 @@ else:
 CACHE_TTL     = 120   # 2 мин за rule-based pre-match данни
 CACHE_TTL_GPT = 3600  # 1 час когато GPT guide вече е готов
 GPT_NARRATIVE_TTL = 6 * 3600  # 6 часа — цял broadcast ден без повторно генериране
+GPT_PREP_TIMEOUT = 75   # сек — hard limit за prep GPT в thread pool
 
 
 # --------------------------------------------------
@@ -153,12 +155,13 @@ class PreMatchEngine:
         self._raw_cache:   dict = {}   # general data cache
         self._gpt_narrative_cache: dict = {}  # fixture_id → {ts, text}
         self._stream_facts_cache: dict = {}    # fixture_id → {ts, facts: list[str]}
+        self._prep_editorial_cache: dict = {}  # fixture_id → {ts, text}
         self._events_cache: dict = {}   # fixture_id → events list
         self._fixture_players_cache: dict = {}  # fixture_id → fixtures/players response
 
     def _cache_ttl_for(self, result: dict) -> int:
         data = result.get("data", {}) if isinstance(result.get("data"), dict) else {}
-        if data.get("gpt_narrative"):
+        if data.get("gpt_narrative") or data.get("prep_editorial"):
             return CACHE_TTL_GPT
         return CACHE_TTL
 
@@ -196,6 +199,25 @@ class PreMatchEngine:
         if cached:
             data["stream_facts"] = cached
             data["stream_facts_gpt_pending"] = False
+
+    def _get_cached_prep_editorial(self, fixture_id: int) -> str:
+        cached = self._prep_editorial_cache.get(fixture_id)
+        if cached and time.time() - cached["ts"] < GPT_NARRATIVE_TTL:
+            return cached.get("text", "") or ""
+        return ""
+
+    def _store_prep_editorial_cache(self, fixture_id: int, text: str) -> None:
+        if text:
+            self._prep_editorial_cache[fixture_id] = {"ts": time.time(), "text": text}
+
+    def _apply_cached_prep_editorial(self, fixture_id: int, data: dict) -> None:
+        if data.get("prep_editorial"):
+            return
+        cached = self._get_cached_prep_editorial(fixture_id)
+        if cached:
+            data["prep_editorial"] = cached
+            data["prep_editorial_draft"] = ""
+            data["prep_editorial_pending"] = False
 
     @staticmethod
     def _form_streak(form_list: list, char: str) -> int:
@@ -1834,6 +1856,121 @@ class PreMatchEngine:
 ## ОЧАКВАНЕ ЗА МАЧА
 {expect_text}"""
 
+    @staticmethod
+    def _build_instant_prep_editorial(data: dict) -> str:
+        """Rule-based detailed prep analysis — same section structure as GPT prep editorial."""
+        home   = data.get("home", "Домакин")
+        away   = data.get("away", "Гост")
+        league = data.get("league", "")
+        date   = data.get("date", "—")
+        hs     = data.get("home_stats") or {}
+        as_    = data.get("away_stats") or {}
+        coaches = data.get("coaches") or {}
+
+        def _team_context(team: str, stats: dict, adv: list) -> str:
+            lines = []
+            if stats.get("played"):
+                lines.append(
+                    f"Форма: {stats.get('wins', 0)}П {stats.get('draws', 0)}Р "
+                    f"{stats.get('losses', 0)}З · голове {stats.get('scored', 0)}:"
+                    f"{stats.get('conceded', 0)}"
+                )
+                if stats.get("avg_score") is not None:
+                    lines.append(f"Средно {float(stats['avg_score']):.2f} вкарани / "
+                                 f"{float(stats.get('avg_conc') or 0):.2f} допуснати на мач")
+            if adv:
+                lines.append("Силни страни (от данните): " + "; ".join(adv[:4]))
+            coach = coaches.get("home" if team == home else "away")
+            if coach:
+                lines.append(f"Треньор: {coach}")
+            return "\n".join(lines) if lines else "Статистиката за този отбор не е налична в момента."
+
+        def _player_block(side: str, label: str) -> str:
+            players = (data.get("top_scorers") or {}).get(side) or []
+            if not players:
+                return f"### {label}\n• Ключови играчи: данните не са налични"
+            out = [f"### {label}"]
+            for p in players[:3]:
+                detail = p.get("label") or ""
+                if not detail and p.get("goals"):
+                    detail = f"⚽ {p.get('goals', 0)} гола"
+                out.append(f"⭐ **{p.get('name', '?')}**\n{detail or '—'}")
+            return "\n".join(out)
+
+        intro_bits = []
+        for f in (data.get("key_factors") or [])[:2]:
+            intro_bits.append(f)
+        gs = data.get("group_scenarios") or {}
+        if gs.get("bullets"):
+            intro_bits.append(gs["bullets"][0])
+        intro = (
+            " ".join(intro_bits)
+            if intro_bits
+            else f"Среща от {league} между {home} и {away} — подготовка за ефир на база наличните API данни."
+        )
+
+        h2h_block = "Няма достатъчно H2H данни в API."
+        if data.get("h2h"):
+            rows = "\n".join(f"• {r}" for r in data["h2h"][:5])
+            h2h_block = (
+                f"{rows}\n\nОбщо {data.get('h2h_count', 0)} срещи · "
+                f"средно {data.get('avg_h2h_goals', 0)} гола · "
+                f"{home} {data.get('h2h_home_wins', 0)}П · {away} {data.get('h2h_away_wins', 0)}П"
+            )
+            if data.get("h2h_latest_scorers"):
+                h2h_block += f"\n{data['h2h_latest_scorers']}"
+
+        facts = data.get("stream_facts") or []
+        tactical = "\n".join(f"{i + 1}. {f}" for i, f in enumerate(facts[:4])) if facts else (
+            "1. Следи центъра и преходите — формата и H2H са в секциите по-горе."
+        )
+
+        return f"""## ЗАГЛАВИЕ
+{home} срещу {away} — анализ за ефир ({league}, {date})
+
+## УВОД
+{intro}
+
+## ОБЩ КОНТЕКСТ
+### {home}
+{_team_context(home, hs, data.get("home_advantages") or [])}
+
+### {away}
+{_team_context(away, as_, data.get("away_advantages") or [])}
+
+## ВЕРОЯТНИ СХЕМИ
+### {home}
+Официалните състави още не са потвърдени. Вероятна ориентация: компактна средна линия и преходи според формата по-горе.
+
+### {away}
+Официалните състави още не са потвърдени. Вероятна ориентация: структурирана игра и опасност при вертикални пасове.
+
+## КЛЮЧОВИ ИГРАЧИ
+{_player_block("home", home)}
+
+{_player_block("away", away)}
+
+## ТАКТИЧЕСКИ КЛЮЧОВЕ
+{tactical}
+
+## ИСТОРИЯ МЕЖДУ ОТБОРИТЕ
+{h2h_block}
+
+## СИЛНИ СТРАНИ И СЛАБОСТИ
+### {home}
+✅ {("; ".join((data.get("home_advantages") or [])[:3]) or "виж формата")}
+❌ Данните не показват изразена слабост — допълни при GPT анализа.
+
+### {away}
+✅ {("; ".join((data.get("away_advantages") or [])[:3]) or "виж формата")}
+❌ Данните не показват изразена слабост — допълни при GPT анализа.
+
+## КАК ОЧАКВАМ ДА ПРОТЕЧЕ МАЧЪТ
+Първите минути вероятно ще са внимателни, докато двата отбора проучват опонента. След това темпът ще зависи от това кой наложи своя ритъм — виж формата и ключовите играчи по-горе.
+
+## АНАЛИЗ И ОЧАКВАН СЦЕНАРИЙ
+Анализът се базира на наличните статистики. Пълният детайлен текст се генерира от AI (~30 сек) — обнови страницата или изчакай автоматичното презареждане."""
+
     def _finalize_prematch_data(self, data: dict, fixture_id=None) -> dict:
         data["analyzed_at"] = datetime.now(timezone.utc).isoformat()
         data["fingerprint"] = self.compute_data_fingerprint(data)
@@ -1852,6 +1989,20 @@ class PreMatchEngine:
             data["stream_facts_gpt_pending"] = (
                 _gpt_available and bool(data.get("stream_facts"))
             )
+
+        if not data.get("prep_editorial"):
+            data["prep_editorial_draft"] = self._build_instant_prep_editorial(data)
+            data["prep_editorial_pending"] = _gpt_available
+            data.pop("prep_editorial_gpt_failed", None)
+        else:
+            data["prep_editorial_pending"] = False
+        if not _gpt_available:
+            data["prep_editorial_pending"] = False
+            data["gpt_guide_pending"] = False
+            data["stream_facts_gpt_pending"] = False
+        if fixture_id:
+            self._apply_cached_prep_editorial(fixture_id, data)
+
         return data
 
     # --------------------------------------------------
@@ -1873,6 +2024,144 @@ class PreMatchEngine:
                 continue
             cleaned.append(line)
         return "\n".join(cleaned).strip()
+
+    def _generate_prep_editorial_gpt(self, fixture_id: int, data: dict) -> str:
+        """Full detailed prep analysis for Stream Prep page (Bulgarian, sectioned)."""
+        if not _gpt_available or _gpt_client is None:
+            return ""
+
+        cached = self._get_cached_prep_editorial(fixture_id)
+        if cached:
+            return cached
+
+        if not self._has_real_data(data):
+            print(f"[PREP] Skipping prep editorial GPT — no real data for {fixture_id}")
+            return ""
+
+        home   = data.get("home", "Домакин")
+        away   = data.get("away", "Гост")
+        league = data.get("league", "")
+        date   = data.get("date", "—")
+        hs     = data.get("home_stats") or {}
+        as_    = data.get("away_stats") or {}
+        coaches = data.get("coaches") or {}
+
+        def _fmt_players(side: str) -> str:
+            players = (data.get("top_scorers") or {}).get(side) or []
+            if not players:
+                return "няма данни"
+            return ", ".join(
+                f"{p.get('name', '?')} ({p.get('label') or p.get('goals', 0)})"
+                for p in players[:5]
+            )
+
+        h2h_lines = "\n".join(f"  - {r}" for r in (data.get("h2h") or [])[:6])
+        facts = "\n".join(f"  - {f}" for f in (data.get("stream_facts") or [])[:8])
+        factors = "\n".join(f"  - {f}" for f in (data.get("key_factors") or [])[:6])
+        home_adv = ", ".join((data.get("home_advantages") or [])[:5]) or "—"
+        away_adv = ", ".join((data.get("away_advantages") or [])[:5]) or "—"
+
+        prompt = f"""Напиши ДЕТАЙЛЕН предмачов анализ за БЪЛГАРСКИ футболен стрийм екип.
+Тон: експертен, жив, като за подготовка преди ефир — НЕ суха статистика.
+Език: български. Имена на играчи на латиница. Отбори: {home} и {away}.
+
+МАЧ: {home} vs {away} | {league} | {date}
+Треньори: {home} — {coaches.get('home', '?')}; {away} — {coaches.get('away', '?')}
+
+ФОРМА {home}: {hs.get('wins',0)}П {hs.get('draws',0)}Р {hs.get('losses',0)}З, голове {hs.get('scored',0)}:{hs.get('conceded',0)}
+ФОРМА {away}: {as_.get('wins',0)}П {as_.get('draws',0)}Р {as_.get('losses',0)}З, голове {as_.get('scored',0)}:{as_.get('conceded',0)}
+
+Ключови играчи {home}: {_fmt_players('home')}
+Ключови играчи {away}: {_fmt_players('away')}
+
+H2H:
+{h2h_lines or '  - няма данни'}
+H2H общо: {data.get('h2h_count', 0)} | средно голове: {data.get('avg_h2h_goals', 0)}
+Предимства {home}: {home_adv}
+Предимства {away}: {away_adv}
+Ключови фактори:
+{factors or '  - —'}
+Факти за ефир:
+{facts or '  - —'}
+
+ЗАДЪЛЖИТЕЛНА СТРУКТУРА (точно тези заглавия с ##):
+
+## ЗАГЛАВИЕ
+(една ред: отбори, турнир, фаза/дата)
+
+## УВОД
+2-4 изречения — защо мачът е интересен, какво е на карта.
+
+## ОБЩ КОНТЕКСТ
+### {home}
+3-5 изречения: история в турнира, стил, период, силни страни.
+### {away}
+3-5 изречения: същото за госта.
+
+## ВЕРОЯТНИ СХЕМИ
+### {home}
+Вероятна схема (напр. 4-3-3). ASCII диаграма с играчи (имена от данните или типични за отбора).
+Основна тактическа идея — 3-4 bullets.
+### {away}
+Същото.
+
+## КЛЮЧОВИ ИГРАЧИ
+### {home}
+За 3 играча: ⭐ име, роля, какво правят различно, защо са важни срещу опонента.
+### {away}
+Същото за 3 играча.
+
+## ТАКТИЧЕСКИ КЛЮЧОВЕ
+3 нумерирани точки (1. 2. 3.) — зони на мача. За всяка: как {home} печели ✅ и как {away} печели ✅.
+
+## ИСТОРИЯ МЕЖДУ ОТБОРИТЕ
+H2H контекст + какво означава за двата отбора днес.
+
+## СИЛНИ СТРАНИ И СЛАБОСТИ
+### {home}
+✅ 4-5 силни | ❌ 2-3 слаби
+### {away}
+✅ 4-5 силни | ❌ 2-3 слаби
+
+## КАК ОЧАКВАМ ДА ПРОТЕЧЕ МАЧЪТ
+Сценарий по фази (първи 20-30 мин, след това). Конкретно, не общо.
+
+## АНАЛИЗ И ОЧАКВАН СЦЕНАРИЙ
+Прогноза за 90 мин (резултат). Кратко обяснение за продължения/елиминация ако е приложимо.
+Това е САМО за prep страницата — бъди смел но обоснован.
+
+ПРАВИЛА:
+- Без markdown таблици. ASCII схеми с моноширинен текст са ОК.
+- Без измислени конкретни статистики — базирай се на данните.
+- Без placeholder скоби [текст].
+- Дължина: 700-1000 думи. Кратко и плътно — без повторения."""
+
+        try:
+            resp = _gpt_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Български футболен аналитик. Структуриран prep анализ с ## секции. "
+                            "Кратък жив текст, ASCII схеми за формации."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=1600,
+                temperature=0.6,
+            )
+            text = self._clean_gpt_placeholders(
+                (resp.choices[0].message.content or "").strip()
+            )
+            if text and len(text) > 200:
+                self._store_prep_editorial_cache(fixture_id, text)
+                print(f"[PREP] Editorial GPT done for fixture {fixture_id} ({len(text)} chars)")
+                return text
+        except Exception as e:
+            print(f"[PREP] Editorial GPT failed for {fixture_id}: {e}")
+        return ""
 
     def _has_real_data(self, data: dict) -> bool:
         """Returns True only when we have verified API data to base analysis on."""
@@ -2643,6 +2932,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         result = cached["data"]
         data = result.get("data", {})
         self._apply_cached_narrative(fixture_id, data)
+        self._apply_cached_prep_editorial(fixture_id, data)
         return result
 
     def analyze_fast(self, fixture_id: int, match: dict) -> dict:
@@ -2655,6 +2945,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
             result = cached["data"]
             data = result.get("data", {})
             self._apply_cached_narrative(fixture_id, data)
+            self._apply_cached_prep_editorial(fixture_id, data)
             return result
 
         print(f"[PREMATCH] Analyzing fixture {fixture_id}...")
@@ -2721,11 +3012,53 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         )
         return result
 
-    def generate_gpt_phase(self, fixture_id: int) -> dict | None:
+    def generate_prep_gpt_phase(self, fixture_id: int) -> dict | None:
         """
-        Phase 2: generate GPT narrative and update cache.
-        Returns updated result dict, or None if GPT unavailable/skipped.
+        Fast GPT for Stream Prep: prep editorial only (no broadcast guide).
         """
+        if not _gpt_available:
+            return None
+
+        cached = self._cache.get(fixture_id)
+        if not cached:
+            return None
+
+        result = cached["data"]
+        data   = result.get("data", {})
+
+        self._apply_cached_prep_editorial(fixture_id, data)
+
+        needs_prep = bool(data.get("prep_editorial_pending") and not data.get("prep_editorial"))
+
+        if not needs_prep:
+            result["data"] = data
+            self._cache[fixture_id] = {"ts": time.time(), "data": result}
+            return result
+
+        prep_text = ""
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(self._generate_prep_editorial_gpt, fixture_id, data)
+                prep_text = fut.result(timeout=GPT_PREP_TIMEOUT) or ""
+        except Exception as e:
+            print(f"[PREP] Editorial GPT timeout/error for {fixture_id}: {e}")
+
+        if prep_text:
+            data["prep_editorial"] = prep_text
+            data["prep_editorial_draft"] = ""
+            data["prep_editorial_pending"] = False
+            data.pop("prep_editorial_gpt_failed", None)
+        else:
+            data["prep_editorial_pending"] = False
+            data["prep_editorial_gpt_failed"] = True
+            print(f"[PREP] Editorial GPT gave no result for {fixture_id} — keeping API draft")
+
+        result["data"] = data
+        self._cache[fixture_id] = {"ts": time.time(), "data": result}
+        return result
+
+    def generate_overlay_gpt_phase(self, fixture_id: int) -> dict | None:
+        """GPT for live overlay: broadcast guide + polished stream facts."""
         if not _gpt_available:
             return None
 
@@ -2740,7 +3073,7 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         self._apply_cached_stream_facts(fixture_id, data)
 
         needs_narrative = not data.get("gpt_narrative")
-        needs_facts = bool(data.get("stream_facts_gpt_pending"))
+        needs_facts = bool(data.get("stream_facts_gpt_pending") and data.get("stream_facts"))
 
         if not needs_narrative and not needs_facts:
             result["data"] = data
@@ -2753,6 +3086,8 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
                 data["gpt_narrative"] = narrative
                 data["broadcast_guide_draft"] = ""
                 data["gpt_guide_pending"] = False
+            else:
+                data["gpt_guide_pending"] = False
 
         if needs_facts:
             polished = self._generate_stream_facts_gpt(fixture_id, data)
@@ -2763,6 +3098,17 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         result["data"] = data
         self._cache[fixture_id] = {"ts": time.time(), "data": result}
         return result if (data.get("gpt_narrative") or data.get("stream_facts")) else None
+
+    def generate_gpt_phase(self, fixture_id: int) -> dict | None:
+        """
+        Phase 2: full GPT — prep editorial, overlay guide, stream facts.
+        Used when a match goes live on overlay.
+        """
+        if not _gpt_available:
+            return None
+
+        self.generate_prep_gpt_phase(fixture_id)
+        return self.generate_overlay_gpt_phase(fixture_id)
 
     def analyze(self, fixture_id: int, match: dict) -> dict:
         """

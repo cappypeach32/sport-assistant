@@ -97,6 +97,9 @@ _last_ht_status:     str   = ""
 _last_ft_status:     str   = ""
 _postmatch_gpt_spawned: set = set()  # fixture_ids with GPT task already started
 _prep_gpt_spawned: set = set()       # prep page GPT tasks (independent of active match)
+_prep_gpt_started: dict = {}         # fixture_id → spawn timestamp (stale watchdog)
+PREP_GPT_STALE_SEC = 95              # re-spawn if background GPT appears stuck
+_overlay_gpt_warm_spawned: set = set()  # deferred broadcast guide after prep
 _last_goal_count:    int   = 0    # detect goals for forced commentary refresh
 _last_prematch_refresh: dict = {}  # fixture_id → last background refresh ts
 PREMATCH_REFRESH_INTERVAL = 1800   # 30 min — refresh prematch data for active match
@@ -1110,21 +1113,43 @@ def _match_dict_from_prematch(fixture_id: int, result: dict) -> dict:
 def _prep_needs_gpt(data: dict) -> bool:
     if not data:
         return False
+    return bool(data.get("prep_editorial_pending") and not data.get("prep_editorial"))
+
+
+def _overlay_gpt_needs_warm(data: dict) -> bool:
+    if not data:
+        return False
     if data.get("gpt_guide_pending") and not data.get("gpt_narrative"):
-        return True
-    if data.get("stream_facts_gpt_pending") and data.get("stream_facts"):
         return True
     return False
 
 
+async def _run_overlay_gpt_warm_async(fixture_id: int):
+    """Generate broadcast guide in background after prep — does not block prep UI."""
+    global _overlay_gpt_warm_spawned
+    if fixture_id in _overlay_gpt_warm_spawned:
+        return
+    _overlay_gpt_warm_spawned.add(fixture_id)
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, prematch_engine.generate_overlay_gpt_phase, fixture_id,
+        )
+        print(f"[PREP] Overlay GPT warm done for fixture {fixture_id}")
+    except Exception as e:
+        print(f"[PREP] Overlay GPT warm error: {e}")
+    finally:
+        _overlay_gpt_warm_spawned.discard(fixture_id)
+
+
 async def _run_prep_gpt_async(fixture_id: int):
-    """Generate GPT guide + stream facts for prep cache (broadcast if same active match)."""
+    """Generate prep editorial (+ facts) — fast path, no broadcast guide."""
     global latest_prematch, _prep_gpt_spawned
     print(f"[PREP] GPT task started for fixture {fixture_id}")
     try:
         loop = asyncio.get_running_loop()
         gpt_result = await loop.run_in_executor(
-            None, prematch_engine.generate_gpt_phase, fixture_id,
+            None, prematch_engine.generate_prep_gpt_phase, fixture_id,
         )
         if gpt_result and active_match and active_match.get("raw_id") == fixture_id:
             latest_prematch = gpt_result
@@ -1142,20 +1167,32 @@ async def _run_prep_gpt_async(fixture_id: int):
             print(f"[PREP] GPT done — also broadcast to active overlay for {fixture_id}")
         else:
             print(f"[PREP] GPT done for fixture {fixture_id}")
+
+        cached = prematch_engine.get_cached_prematch(fixture_id)
+        inner = (cached or {}).get("data") or (gpt_result or {}).get("data") or {}
+        if _overlay_gpt_needs_warm(inner):
+            asyncio.create_task(_run_overlay_gpt_warm_async(fixture_id))
     except Exception as e:
         import traceback
         print(f"[PREP] GPT error: {e}")
         traceback.print_exc()
     finally:
         _prep_gpt_spawned.discard(fixture_id)
+        _prep_gpt_started.pop(fixture_id, None)
 
 
 def _spawn_prep_gpt_if_needed(fixture_id: int, data: dict) -> None:
     if not _prep_needs_gpt(data):
         return
+    now = time.time()
     if fixture_id in _prep_gpt_spawned:
-        return
+        started = _prep_gpt_started.get(fixture_id, now)
+        if now - started < PREP_GPT_STALE_SEC:
+            return
+        print(f"[PREP] Stale GPT task for fixture {fixture_id} — re-spawning")
+        _prep_gpt_spawned.discard(fixture_id)
     _prep_gpt_spawned.add(fixture_id)
+    _prep_gpt_started[fixture_id] = now
     asyncio.create_task(_run_prep_gpt_async(fixture_id))
 
 
@@ -1167,6 +1204,8 @@ async def get_prep_kit(fixture_id: int, refresh: bool = False):
     """
     if refresh:
         prematch_engine._cache.pop(fixture_id, None)
+        _prep_gpt_spawned.discard(fixture_id)
+        _prep_gpt_started.pop(fixture_id, None)
 
     match_stub = {"raw_id": fixture_id}
     loop = asyncio.get_running_loop()
@@ -1490,7 +1529,7 @@ async def _load_prematch_async(fixture_id: int, match: dict):
             return
 
         gpt_result = await loop.run_in_executor(
-            None, prematch_engine.generate_gpt_phase, fixture_id
+            None, prematch_engine.generate_overlay_gpt_phase, fixture_id
         )
         if active_match and active_match.get("raw_id") != fixture_id:
             return

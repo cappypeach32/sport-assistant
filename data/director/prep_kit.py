@@ -3,6 +3,52 @@
 import re
 
 
+PREP_SECTION_ICONS = {
+    "ЗАГЛАВИЕ": "🏆",
+    "УВОД": "📌",
+    "ОБЩ КОНТЕКСТ": "🌍",
+    "ВЕРОЯТНИ СХЕМИ": "📐",
+    "КЛЮЧОВИ ИГРАЧИ": "⭐",
+    "ТАКТИЧЕСКИ КЛЮЧОВЕ": "🎯",
+    "ИСТОРИЯ МЕЖДУ ОТБОРИТЕ": "📜",
+    "СИЛНИ СТРАНИ И СЛАБОСТИ": "⚖️",
+    "КАК ОЧАКВАМ ДА ПРОТЕЧЕ МАЧЪТ": "⏱️",
+    "АНАЛИЗ И ОЧАКВАН СЦЕНАРИЙ": "🔮",
+}
+
+
+def parse_prep_editorial(text: str) -> list[dict]:
+    """Split ## sectioned prep editorial into UI blocks."""
+    if not text or not text.strip():
+        return []
+
+    sections: list[dict] = []
+    chunks = re.split(r"\n(?=## )", text.strip())
+    for chunk in chunks:
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        m = re.match(r"^## (.+?)(?:\n|$)", chunk)
+        if not m:
+            continue
+        title = m.group(1).strip()
+        body = chunk[m.end():].strip()
+        key = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+        sections.append({
+            "key": key,
+            "title": title,
+            "body": body,
+            "icon": PREP_SECTION_ICONS.get(title.upper(), "📄"),
+        })
+    return sections
+
+
+def _prep_headline(sections: list[dict], fallback: str) -> str:
+    for sec in sections:
+        if sec.get("title", "").upper() == "ЗАГЛАВИЕ" and sec.get("body"):
+            return sec["body"].split("\n")[0].strip()
+    return fallback
+
 def _extract_talking_points(narrative: str) -> list[dict]:
     if not narrative:
         return []
@@ -67,6 +113,8 @@ def build_prep_kit(prematch_result: dict) -> dict:
     away = data.get("away") or meta.get("away_name", "")
 
     guide = data.get("gpt_narrative") or data.get("broadcast_guide_draft") or ""
+    prep_text = data.get("prep_editorial") or data.get("prep_editorial_draft") or ""
+    prep_sections = parse_prep_editorial(prep_text)
 
     injuries = data.get("injuries") or {}
     inj_home = injuries.get("home") or []
@@ -75,13 +123,22 @@ def build_prep_kit(prematch_result: dict) -> dict:
     return {
         "ready": True,
         "match_label": f"{home} срещу {away}",
+        "headline": _prep_headline(prep_sections, f"{home} срещу {away} — детайлен анализ"),
         "competition": data.get("league") or meta.get("league_name", ""),
         "date": data.get("date") or (meta.get("date") or "")[:10],
         "analyzed_at": data.get("analyzed_at", ""),
         "fingerprint": data.get("fingerprint", ""),
         "loading": {
-            "gpt_guide": bool(data.get("gpt_guide_pending") and not data.get("gpt_narrative")),
-            "stream_facts": bool(data.get("stream_facts_gpt_pending")),
+            "prep_editorial": bool(
+                data.get("prep_editorial_pending") and not data.get("prep_editorial")
+            ),
+        },
+        "prep_editorial_failed": bool(data.get("prep_editorial_gpt_failed")),
+        "prep_editorial": {
+            "text": prep_text,
+            "sections": prep_sections,
+            "is_gpt": bool(data.get("prep_editorial")),
+            "is_draft": bool(data.get("prep_editorial_draft") and not data.get("prep_editorial")),
         },
         "stream_facts": data.get("stream_facts") or [],
         "form": {

@@ -125,6 +125,57 @@ a { color: var(--blue); text-decoration: none; font-weight: 600; }
     font-size: 0.88rem; line-height: 1.55; white-space: pre-wrap;
     max-height: 400px; overflow-y: auto; color: var(--muted);
 }
+.editorial-hero {
+    font-size: 1.05rem; line-height: 1.65; color: var(--text);
+    margin-bottom: 18px; padding: 16px 18px;
+    background: linear-gradient(135deg, rgba(0,255,153,0.06), rgba(77,159,255,0.06));
+    border: 1px solid rgba(0,255,153,0.15); border-radius: 14px;
+}
+.editorial-section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 1.15rem 1.3rem; margin-bottom: 14px;
+}
+.editorial-section.highlight {
+    border-color: rgba(234,179,8,0.35);
+    background: linear-gradient(180deg, rgba(234,179,8,0.06), var(--surface));
+}
+.editorial-title {
+    font-size: 0.78rem; font-weight: 800; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--purple); margin-bottom: 0.85rem;
+}
+.ed-sub {
+    font-size: 0.95rem; font-weight: 800; color: var(--green);
+    margin: 1rem 0 0.5rem;
+}
+.ed-p { font-size: 0.95rem; line-height: 1.6; margin: 0.4rem 0; }
+.ed-num { font-size: 0.95rem; line-height: 1.55; margin: 0.5rem 0; padding-left: 0.25rem; }
+.ed-check { font-size: 0.92rem; line-height: 1.5; margin: 0.35rem 0; }
+.ed-diagram {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.78rem; line-height: 1.35; color: var(--blue);
+    background: rgba(77,159,255,0.06); border: 1px solid rgba(77,159,255,0.15);
+    border-radius: 10px; padding: 12px 14px; margin: 10px 0; overflow-x: auto;
+    white-space: pre;
+}
+.draft-badge {
+    display: inline-block; font-size: 0.7rem; font-weight: 800;
+    padding: 3px 8px; border-radius: 6px; margin-left: 8px;
+    background: rgba(234,179,8,0.15); color: var(--yellow); vertical-align: middle;
+}
+.warn-banner {
+    display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px;
+    background: rgba(234,179,8,0.1); border: 1px solid rgba(234,179,8,0.3);
+    border-radius: 10px; margin-bottom: 16px; font-size: 0.85rem; line-height: 1.45;
+    color: var(--yellow);
+}
+.ref-block { margin-top: 20px; }
+.ref-block summary {
+    cursor: pointer; font-size: 0.8rem; font-weight: 800;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 10px 0; list-style: none;
+}
+.ref-block summary::-webkit-details-marker { display: none; }
+.ref-inner { padding-top: 8px; }
 </style>
 </head>
 <body>
@@ -153,7 +204,7 @@ a { color: var(--blue); text-decoration: none; font-weight: 600; }
     <main class="kit-panel" id="kit-panel">
         <div class="kit-empty" id="kit-placeholder">
             Избери предстоящ мач отляво.<br/>
-            Ще се генерира пакет с факти, форма, H2H, играчи и говорни точки за ефира.
+            Ще получиш детайлен анализ: контекст, схеми, ключови играчи, тактика и прогноза за ефира.
         </div>
         <div id="kit-content" style="display:none"></div>
     </main>
@@ -235,7 +286,7 @@ function stopPoll() {
 
 function startPoll(fixtureId) {
     stopPoll();
-    state.pollTimer = setInterval(() => loadKit(fixtureId, false), 8000);
+    state.pollTimer = setInterval(() => loadKit(fixtureId, false), 4000);
 }
 
 async function selectPrepMatch(id) {
@@ -257,7 +308,7 @@ async function loadKit(fixtureId, showSpinner) {
     }
 
     try {
-        const res = await fetch(`/prep/${fixtureId}`);
+        const res = await fetch(`/prep/${fixtureId}${showSpinner ? "?refresh=true" : ""}`);
         const data = await res.json();
         if (!data.ok) {
             content.innerHTML = `<div class="kit-empty">${esc(data.error || "Грешка")}</div>`;
@@ -268,7 +319,8 @@ async function loadKit(fixtureId, showSpinner) {
             state.selectedMatch = data.match;
         }
         renderKit(data.match, data.kit);
-        if (!data.kit?.loading?.gpt_guide && !data.kit?.loading?.stream_facts) {
+        const loading = data.kit?.loading;
+        if (!loading?.prep_editorial || data.kit?.prep_editorial_failed) {
             stopPoll();
         }
     } catch (e) {
@@ -299,44 +351,90 @@ function renderPlayers(players, color) {
     </div>`).join("");
 }
 
-function renderKit(match, kit) {
-    if (!kit?.ready) {
-        document.getElementById("kit-content").innerHTML = '<div class="kit-empty">Данните не са налични</div>';
-        return;
+function formatInline(s) {
+    let e = esc(s);
+    e = e.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    return e;
+}
+
+function looksLikeDiagramBlock(text) {
+    const lines = text.split("\n").filter(l => l.trim());
+    if (lines.length < 2) return false;
+    const diagramish = lines.filter(l =>
+        /^\s{3,}\S/.test(l) ||
+        (/^[а-яА-Яa-zA-Z]/.test(l) && (l.match(/\s{2,}/g) || []).length >= 1)
+    );
+    return diagramish.length >= Math.min(2, lines.length);
+}
+
+function formatParagraphs(text) {
+    return text.split(/\n\n+/).map(p => {
+        p = p.trim();
+        if (!p) return "";
+        if (looksLikeDiagramBlock(p)) {
+            return `<pre class="ed-diagram">${esc(p)}</pre>`;
+        }
+        const lines = p.split("\n").map(l => {
+            const t = l.trim();
+            if (!t) return "";
+            if (/^[✅❌⭐]/.test(t)) return `<div class="ed-check">${formatInline(t)}</div>`;
+            if (/^\d+\.\s/.test(t)) return `<div class="ed-num">${formatInline(t)}</div>`;
+            if (t.startsWith("• ") || t.startsWith("- ")) return `<div class="ed-p">${formatInline(t)}</div>`;
+            return formatInline(t);
+        }).filter(Boolean);
+        if (lines.every(x => x.startsWith("<div"))) return lines.join("");
+        return `<p class="ed-p">${lines.join("<br/>")}</p>`;
+    }).join("");
+}
+
+function formatEditorialBody(body) {
+    if (!body) return "";
+    const blocks = body.split(/(?=^### )/m);
+    return blocks.map(block => {
+        block = block.trim();
+        if (!block) return "";
+        if (block.startsWith("### ")) {
+            const nl = block.indexOf("\n");
+            const h = nl > 0 ? block.slice(4, nl).trim() : block.slice(4).trim();
+            const rest = nl > 0 ? block.slice(nl + 1) : "";
+            return `<h4 class="ed-sub">${esc(h)}</h4>${formatParagraphs(rest)}`;
+        }
+        return formatParagraphs(block);
+    }).join("");
+}
+
+function renderEditorialSections(prep) {
+    if (!prep?.sections?.length) return "";
+    let html = "";
+    for (const sec of prep.sections) {
+        const titleUp = (sec.title || "").toUpperCase();
+        if (titleUp === "ЗАГЛАВИЕ") continue;
+        const extra = titleUp === "АНАЛИЗ И ОЧАКВАН СЦЕНАРИЙ" ? " highlight" : "";
+        if (titleUp === "УВОД") {
+            html += `<div class="editorial-hero">${formatEditorialBody(sec.body)}</div>`;
+            continue;
+        }
+        html += `<div class="editorial-section${extra}">
+            <div class="editorial-title">${sec.icon || "📄"} ${esc(sec.title)}</div>
+            ${formatEditorialBody(sec.body)}
+        </div>`;
     }
+    return html;
+}
 
-    const home = match?.home || "";
-    const away = match?.away || "";
-    const loading = kit.loading?.gpt_guide || kit.loading?.stream_facts;
-
-    let html = `<div class="kit-header">
-        <div class="kit-title">${esc(home)} срещу ${esc(away)}</div>
-        <div class="kit-meta">${esc(kit.competition)} · ${esc(formatKickoff(match?.start_time))}</div>
-        <div class="kit-actions">
-            <button type="button" class="btn btn-primary" onclick="goLive()">▶ Зареди в ефир</button>
-            <button type="button" class="btn" onclick="window.open('/overlay/commentator','_blank')">🎙️ Коментатор</button>
-            <button type="button" class="btn" onclick="copyKit()">📋 Копирай kit</button>
-            <button type="button" class="btn" onclick="loadKit(${state.selectedId}, true)">↻ Обнови</button>
-        </div>
-    </div>`;
-
-    if (loading) {
-        html += `<div class="kit-loading"><div class="spinner"></div> AI текстът се доразработва — автоматично обновяване...</div>`;
-    }
-
+function renderReferenceData(kit, home, away) {
+    let html = "";
     if (kit.stream_facts?.length) {
         html += `<div class="section"><div class="section-title">💡 Интересни факти</div>
             ${kit.stream_facts.map(f => `<div class="fact">${esc(f)}</div>`).join("")}
         </div>`;
     }
-
     html += `<div class="section"><div class="section-title">📊 Форма</div>
         <div class="grid-2">
             ${renderFormBlock(kit.form?.home, home)}
             ${renderFormBlock(kit.form?.away, away)}
         </div>
     </div>`;
-
     if (kit.standings?.reliable) {
         const hst = kit.standings.home || {};
         const ast = kit.standings.away || {};
@@ -347,7 +445,6 @@ function renderKit(match, kit) {
             </div>
         </div>`;
     }
-
     if (kit.h2h?.rows?.length) {
         html += `<div class="section"><div class="section-title">⚔️ Директни срещи (H2H)</div>
             ${kit.h2h.rows.slice(0, 5).map(r => `<div class="bullet">${esc(r)}</div>`).join("")}
@@ -355,38 +452,14 @@ function renderKit(match, kit) {
             ${kit.h2h.latest_scorers ? `<div class="stat-line" style="margin-top:4px;color:var(--green)">${esc(kit.h2h.latest_scorers)}</div>` : ""}
         </div>`;
     }
-
     if (kit.key_players?.home?.length || kit.key_players?.away?.length) {
-        html += `<div class="section"><div class="section-title">⭐ Ключови играчи</div>
+        html += `<div class="section"><div class="section-title">⭐ Ключови играчи (API)</div>
             <div class="grid-2">
                 <div>${renderPlayers(kit.key_players.home, "var(--green)")}</div>
                 <div>${renderPlayers(kit.key_players.away, "var(--blue)")}</div>
             </div>
         </div>`;
     }
-
-    if (kit.talking_points?.length) {
-        html += `<div class="section"><div class="section-title">🎙️ Говорни точки</div>
-            ${kit.talking_points.map(p => `<div><div class="point-title">${esc(p.title)}</div><div class="point-text">${esc(p.text)}</div></div>`).join("")}
-        </div>`;
-    } else if (kit.key_factors?.length) {
-        html += `<div class="section"><div class="section-title">🎙️ Ключови теми</div>
-            ${kit.key_factors.map(f => `<div class="bullet">${esc(f)}</div>`).join("")}
-        </div>`;
-    }
-
-    if (kit.historical_facts?.length) {
-        html += `<div class="section"><div class="section-title">📜 Исторически факти</div>
-            ${kit.historical_facts.map(f => `<div class="bullet">${esc(f)}</div>`).join("")}
-        </div>`;
-    }
-
-    if (kit.group_scenarios?.available && kit.group_scenarios.bullets?.length) {
-        html += `<div class="section"><div class="section-title">📈 Сценарий за групата</div>
-            ${kit.group_scenarios.bullets.map(b => `<div class="bullet">${esc(b)}</div>`).join("")}
-        </div>`;
-    }
-
     const ch = kit.coaches?.home, ca = kit.coaches?.away;
     const ref = kit.referee || {};
     if (ch || ca || ref.name) {
@@ -399,7 +472,6 @@ function renderKit(match, kit) {
         }
         html += `</div>`;
     }
-
     const injH = kit.injuries?.home || [], injA = kit.injuries?.away || [];
     if (injH.length || injA.length) {
         html += `<div class="section"><div class="section-title">🏥 Контузии / наказания</div>`;
@@ -407,12 +479,56 @@ function renderKit(match, kit) {
         if (injA.length) html += `<div class="stat-line" style="margin-top:6px"><strong>${esc(away)}</strong>: ${injA.map(i => esc(i.name) + (i.reason ? ` (${esc(i.reason)})` : "")).join(", ")}</div>`;
         html += `</div>`;
     }
-
-    if (kit.broadcast_guide) {
-        const badge = kit.has_gpt_guide ? "✓ AI Broadcast Guide" : "Guide от API данни";
-        html += `<div class="section"><div class="section-title">📖 Пълен broadcast guide <span style="color:var(--muted);font-weight:600">(${badge})</span></div>
-            <div class="guide-block">${esc(kit.broadcast_guide)}</div>
+    if (kit.talking_points?.length) {
+        html += `<div class="section"><div class="section-title">🎙️ Говорни точки (broadcast)</div>
+            ${kit.talking_points.map(p => `<div><div class="point-title">${esc(p.title)}</div><div class="point-text">${esc(p.text)}</div></div>`).join("")}
         </div>`;
+    }
+    return html;
+}
+
+function renderKit(match, kit) {
+    if (!kit?.ready) {
+        document.getElementById("kit-content").innerHTML = '<div class="kit-empty">Данните не са налични</div>';
+        return;
+    }
+
+    const home = match?.home || "";
+    const away = match?.away || "";
+    const prep = kit.prep_editorial || {};
+    const loading = kit.loading?.prep_editorial && !kit.prep_editorial_failed;
+    const draftBadge = prep.is_draft ? '<span class="draft-badge">чернова от API</span>' : "";
+    const gptBadge = prep.is_gpt ? '<span class="draft-badge" style="background:rgba(0,255,153,0.15);color:var(--green)">AI анализ</span>' : "";
+
+    let html = `<div class="kit-header">
+        <div class="kit-title">${esc(kit.headline || `${home} срещу ${away}`)}${draftBadge}${gptBadge}</div>
+        <div class="kit-meta">${esc(kit.competition)} · ${esc(formatKickoff(match?.start_time))}</div>
+        <div class="kit-actions">
+            <button type="button" class="btn btn-primary" onclick="goLive()">▶ Зареди в ефир</button>
+            <button type="button" class="btn" onclick="window.open('/overlay/commentator','_blank')">🎙️ Коментатор</button>
+            <button type="button" class="btn" onclick="copyKit()">📋 Копирай анализ</button>
+            <button type="button" class="btn" onclick="loadKit(${state.selectedId}, true)">↻ Обнови</button>
+        </div>
+    </div>`;
+
+    if (loading) {
+        html += `<div class="kit-loading"><div class="spinner"></div> AI надгражда анализа (до ~1 мин) — черновата по-долу е готова за ефир...</div>`;
+    } else if (kit.prep_editorial_failed && prep.is_draft) {
+        html += `<div class="warn-banner">⚠️ AI анализът не успя навреме. Показваме черновата от API — натисни <strong>Обнови</strong> за нов опит.</div>`;
+    }
+
+    if (prep.sections?.length) {
+        html += renderEditorialSections(prep);
+    } else if (prep.text) {
+        html += `<div class="editorial-section"><div class="guide-block" style="max-height:none;color:var(--text)">${esc(prep.text)}</div></div>`;
+    }
+
+    const refHtml = renderReferenceData(kit, home, away);
+    if (refHtml) {
+        html += `<details class="ref-block">
+            <summary>📎 Справочни данни (форма, H2H, контузии)</summary>
+            <div class="ref-inner">${refHtml}</div>
+        </details>`;
     }
 
     document.getElementById("kit-content").innerHTML = html;
@@ -420,7 +536,14 @@ function renderKit(match, kit) {
 }
 
 function buildPlainText(match, kit) {
-    const lines = [`STREAM PREP — ${match?.home} vs ${match?.away}`, kit.competition, ""];
+    const lines = [];
+    const prep = kit.prep_editorial || {};
+    if (prep.text) {
+        lines.push(prep.text);
+        lines.push("");
+    } else {
+        lines.push(`STREAM PREP — ${match?.home} vs ${match?.away}`, kit.competition, "");
+    }
     if (kit.stream_facts?.length) {
         lines.push("ИНТЕРЕСНИ ФАКТИ");
         kit.stream_facts.forEach(f => lines.push(`• ${f}`));
@@ -430,10 +553,6 @@ function buildPlainText(match, kit) {
         lines.push("ГОВОРНИ ТОЧКИ");
         kit.talking_points.forEach(p => lines.push(`${p.title}: ${p.text}`));
         lines.push("");
-    }
-    if (kit.key_factors?.length) {
-        lines.push("КЛЮЧОВИ ФАКТОРИ");
-        kit.key_factors.forEach(f => lines.push(`• ${f}`));
     }
     return lines.join("\n");
 }
