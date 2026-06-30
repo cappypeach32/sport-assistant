@@ -865,6 +865,15 @@ body {
     color: var(--purple); text-decoration: none;
 }
 .view-link:hover { color: var(--green); }
+.prep-cta-btn {
+    display: block; width: 100%; margin-top: 10px; padding: 10px 14px;
+    border-radius: 10px; text-align: center; font-size: 13px; font-weight: 800;
+    text-decoration: none; color: #000;
+    background: linear-gradient(135deg, var(--purple), var(--blue));
+    border: 1px solid rgba(167,139,250,0.5);
+    box-shadow: 0 0 12px rgba(167,139,250,0.25);
+}
+.prep-cta-btn:hover { filter: brightness(1.08); color: #000; }
 .alert-btn {
     margin-top: 6px; width: 100%; padding: 6px 10px; font-size: 11px;
     border-radius: 8px; border: 1px solid var(--border);
@@ -1206,6 +1215,8 @@ body {
                oninput="filterMatches()"
                style="margin-top:6px"/>
 
+        <a href="/overlay/prep" class="prep-cta-btn">📋 Подготовка за ефир (Stream Prep)</a>
+
         <div class="health-bar" id="health-bar">
             <div class="health-item">
                 <span class="health-dot health-warn" id="health-ws-dot"></span>
@@ -1284,7 +1295,8 @@ body {
     <!-- WAITING STATE -->
     <div class="waiting-state" id="waiting-state">
         <div class="w-icon">📡</div>
-        <div class="w-text">Изберете мач, за да започне анализът</div>
+        <div class="w-text">Изберете мач от списъка вляво</div>
+        <a href="/overlay/prep" class="prep-cta-btn" style="max-width:320px;margin-top:16px">📋 Подготовка за ефир — анализ преди стрийм</a>
     </div>
 
     <div class="internal-notice" id="internal-notice" style="display:none">
