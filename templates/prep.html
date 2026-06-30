@@ -173,48 +173,72 @@ a { color: var(--blue); text-decoration: none; font-weight: 600; }
 }
 .formation-team-card .ed-sub { margin: 0; padding: 12px 14px 8px; }
 .formation-scheme-badge {
-    display: inline-block; font-size: 0.72rem; font-weight: 800;
-    padding: 4px 11px; border-radius: 999px; margin: 0 14px 10px;
+    display: inline-block; font-size: 0.8rem; font-weight: 800;
+    padding: 5px 12px; border-radius: 999px; margin: 0 0 10px;
     background: rgba(0,255,153,0.14); color: var(--green);
-    border: 1px solid rgba(0,255,153,0.28); letter-spacing: 0.04em;
+    border: 1px solid rgba(0,255,153,0.28); letter-spacing: 0.05em;
 }
-.pitch {
-    position: relative; min-height: 300px; margin: 0 10px 12px;
-    padding: 14px 10px 16px;
-    background: linear-gradient(165deg, #1e6b42 0%, #155a36 45%, #1a4d32 100%);
-    border-radius: 10px;
-    display: flex; flex-direction: column; justify-content: space-between; gap: 4px;
-    box-shadow: inset 0 0 40px rgba(0,0,0,0.25);
+.formation-card-body { padding: 0 12px 12px; }
+.pitch-pro {
+    position: relative; width: 100%; aspect-ratio: 2/3; max-height: 400px;
+    border-radius: 12px; overflow: hidden;
+    background: repeating-linear-gradient(
+        180deg,
+        #3a9d5c 0px, #3a9d5c 28px,
+        #348f54 28px, #348f54 56px
+    );
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,0.35), 0 4px 20px rgba(0,0,0,0.35);
 }
-.pitch-markings {
-    position: absolute; inset: 10px; border: 2px solid rgba(255,255,255,0.22);
-    border-radius: 6px; pointer-events: none;
+.pitch-pro-field {
+    position: absolute; inset: 10px;
+    border: 2px solid rgba(255,255,255,0.45); border-radius: 4px;
+    pointer-events: none;
 }
-.pitch-markings::before {
+.pitch-pro-field::before {
     content: ""; position: absolute; top: 50%; left: 0; right: 0; height: 2px;
-    background: rgba(255,255,255,0.18); transform: translateY(-50%);
+    background: rgba(255,255,255,0.35); transform: translateY(-50%);
 }
-.pitch-markings::after {
-    content: ""; position: absolute; top: 50%; left: 50%; width: 56px; height: 56px;
-    border: 2px solid rgba(255,255,255,0.18); border-radius: 50%;
-    transform: translate(-50%, -50%);
+.pitch-pro-field::after {
+    content: ""; position: absolute; top: 50%; left: 50%;
+    width: 22%; aspect-ratio: 1; border: 2px solid rgba(255,255,255,0.35);
+    border-radius: 50%; transform: translate(-50%, -50%);
 }
-.pitch-row {
-    position: relative; z-index: 1;
-    display: flex; justify-content: center; align-items: center;
-    flex-wrap: wrap; gap: 6px 8px; min-height: 2rem;
+.pitch-pro-box-top, .pitch-pro-box-bottom {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    width: 44%; height: 16%; border: 2px solid rgba(255,255,255,0.3);
+    pointer-events: none;
 }
-.pitch-player {
-    font-size: 0.65rem; font-weight: 700; line-height: 1.15; text-align: center;
-    padding: 5px 7px; min-width: 52px; max-width: 92px;
-    border-radius: 8px;
-    background: rgba(5,6,10,0.82); color: #f0f4f8;
-    border: 1px solid rgba(255,255,255,0.14);
-    box-shadow: 0 2px 6px rgba(0,0,0,0.35);
-    word-break: break-word;
+.pitch-pro-box-top { top: 10px; border-top: none; }
+.pitch-pro-box-bottom { bottom: 10px; border-bottom: none; }
+.pitch-pro-inner {
+    position: absolute; inset: 14px 6px;
+    display: flex; flex-direction: column-reverse;
+    justify-content: space-between; z-index: 1;
 }
-.pitch-player.gk {
-    background: rgba(234,179,8,0.22); border-color: rgba(234,179,8,0.45); color: #fde68a;
+.pitch-pro-line {
+    display: flex; justify-content: space-evenly; align-items: flex-end;
+    gap: 2px; padding: 0 2px;
+}
+.pitch-pro-player {
+    display: flex; flex-direction: column; align-items: center;
+    flex: 1; min-width: 0; max-width: 76px;
+}
+.pitch-pro-dot {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(145deg, #1a1f2e, #0d1018);
+    border: 2.5px solid #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+    flex-shrink: 0;
+}
+.pitch-pro-dot.gk {
+    border-color: #fbbf24;
+    background: linear-gradient(145deg, #5c4a12, #3d2f08);
+}
+.pitch-pro-name {
+    margin-top: 5px; font-size: 0.62rem; font-weight: 800;
+    color: #fff; text-align: center; line-height: 1.2;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.9);
+    word-break: break-word; max-width: 100%;
 }
 .formation-tactics {
     padding: 10px 14px 14px; font-size: 0.86rem; line-height: 1.5;
@@ -435,79 +459,152 @@ function stripCodeFences(text) {
     return (text || "").replace(/```[\w]*\n?/g, "").trim();
 }
 
-function extractPlayersFromLine(line) {
-    const trimmed = line.trim();
-    if (!trimmed || /[а-яА-ЯЁё]/.test(trimmed)) return [];
-    if (/^(основна|тактическ|вероятна|схема|идея)/i.test(trimmed)) return [];
-
-    let parts = trimmed.split(/\s{2,}|\t+/).map(s => s.trim()).filter(Boolean);
-    if (parts.length <= 1) {
-        const words = trimmed.split(/\s+/).filter(Boolean);
-        const nameLike = words.filter(w => /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\.\-'']{1,}$/.test(w));
-        if (nameLike.length >= 2 && nameLike.length <= 7) parts = nameLike;
-    }
-    return parts.filter(p => p.length > 1 && p.length < 40 && !/^\d+$/.test(p));
+function cleanPlayerName(s) {
+    return (s || "").replace(/\*\*/g, "").replace(/\([^)]*\)/g, "").replace(/^\d+[\.\)]\s*/, "").trim();
 }
 
-function parseFormationContent(text) {
-    const raw = stripCodeFences(text);
-    let scheme = "";
+function isPlayerToken(w) {
+    if (!w || w.length < 2 || w.length > 26) return false;
+    if (/^\[/.test(w) || /^[\d]+$/.test(w)) return false;
+    if (/^(гол|вратар|десен|ляв|цент|напад|крило|полуза|бек|защит|опорен|схема|основна)/i.test(w)) return false;
+    if (/^[А-ЯЁ][а-яё\-]{1,}$/.test(w)) return true;
+    if (/^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\.\-']{1,}$/.test(w)) return true;
+    return false;
+}
+
+function parseNameLine(line) {
+    let t = (line || "").trim();
+    if (!t) return [];
+    t = t.replace(/\[([^\]]+)\]/g, " ").replace(/^[•\-\*]\s*/, "").trim();
+    if (!t) return [];
+
+    if (t.includes(",")) {
+        return t.split(",").map(cleanPlayerName).filter(n => n && isPlayerToken(n.split(/\s+/)[0]) || n.length >= 2);
+    }
+
+    const tokens = t.split(/\s+/).filter(isPlayerToken);
+    if (tokens.length) return tokens.map(cleanPlayerName);
+
+    const single = cleanPlayerName(t);
+    if (single && single.length >= 2 && !/^(основна|тактическ)/i.test(single)) return [single];
+    return [];
+}
+
+function shortPlayerName(full) {
+    const n = displayPlayerName(full);
+    const parts = n.split(/\s+/).filter(Boolean);
+    if (parts.length > 1 && parts[parts.length - 1].length >= 2) return parts[parts.length - 1];
+    return n;
+}
+
+function parseSchemeString(scheme) {
+    if (!scheme) return null;
+    const m = scheme.match(/([\d]+(?:\s*[-/]\s*[\d]+)+)/);
+    if (!m) return null;
+    const parts = m[1].replace(/\s/g, "").split(/[-/]/).map(Number);
+    if (parts.some(n => isNaN(n) || n < 1)) return null;
+    return [1, ...parts];
+}
+
+function rowsFromSchemeAndPlayers(scheme, players) {
+    const lines = parseSchemeString(scheme);
+    if (!lines || !players.length) return null;
+    const need = lines.reduce((a, b) => a + b, 0);
+    if (players.length !== need) return null;
     const rows = [];
-    const tactics = [];
-    let inTactics = false;
+    let i = 0;
+    for (const n of lines) {
+        rows.push(players.slice(i, i + n).map(name => ({ name })));
+        i += n;
+    }
+    return rows;
+}
+
+function collectPlayersInOrder(text) {
+    const players = [];
+    const raw = stripCodeFences(text);
+    let hitTactics = false;
 
     for (const line of raw.split("\n")) {
         const t = line.trim();
         if (!t) continue;
+        if (/^основна\s+тактическ/i.test(t)) { hitTactics = true; continue; }
+        if (hitTactics && /^[•\-\*]/.test(t)) continue;
+        if (hitTactics && /[а-яА-Я]/.test(t) && !isPlayerToken(t.split(/\s+/)[0])) continue;
+        if (/(?:вероятна\s+)?схема\s*:/i.test(t)) continue;
+        if (/^\[([^\]]+)\](\s*\[[^\]]+\])*\s*$/.test(t)) continue;
 
-        const schemeM = t.match(/(?:вероятна\s+)?схема\s*:?\s*([\d]+(?:\s*[-/]\s*[\d]+)+)/i);
-        if (schemeM) {
-            scheme = schemeM[1].replace(/\s/g, "");
-            continue;
-        }
-
-        if (/^основна\s+тактическ/i.test(t)) {
-            inTactics = true;
-            continue;
-        }
-
-        if (/^[•\-\*]\s+/.test(t) || (inTactics && /[а-яА-Я]/.test(t))) {
-            tactics.push(t.replace(/^[•\-\*]\s+/, ""));
-            inTactics = true;
-            continue;
-        }
-
-        const players = extractPlayersFromLine(t);
-        if (players.length) {
-            rows.push(players);
-            inTactics = false;
+        for (const name of parseNameLine(t)) {
+            if (name) players.push(name);
         }
     }
-    return { scheme, rows, tactics };
+    return players;
+}
+
+function collectTactics(text) {
+    const tactics = [];
+    let inTactics = false;
+    for (const line of stripCodeFences(text).split("\n")) {
+        const t = line.trim();
+        if (/^основна\s+тактическ/i.test(t)) { inTactics = true; continue; }
+        if (!inTactics) continue;
+        if (/^[•\-\*]\s+/.test(t)) tactics.push(t.replace(/^[•\-\*]\s+/, ""));
+        else if (t && /[а-яА-Я]/.test(t)) tactics.push(t);
+    }
+    return tactics;
+}
+
+function extractScheme(text) {
+    const m = stripCodeFences(text).match(/(?:вероятна\s+)?схема\s*:?\s*([\d]+(?:\s*[-/]\s*[\d]+)+)/i);
+    return m ? m[1].replace(/\s/g, "") : "";
+}
+
+function parseFormationContent(text) {
+    const scheme = extractScheme(text);
+    const players = collectPlayersInOrder(text);
+    const tactics = collectTactics(text);
+    let rows = rowsFromSchemeAndPlayers(scheme, players);
+
+    if (!rows && players.length >= 8) {
+        const chunk = Math.ceil(players.length / 4);
+        rows = [];
+        for (let i = 0; i < players.length; i += chunk) {
+            rows.push(players.slice(i, i + chunk).map(name => ({ name })));
+        }
+    }
+
+    return { scheme, rows: rows || [], tactics, players };
 }
 
 function renderFormationPitch(rows) {
     if (!rows?.length) return "";
-    const lastRow = rows[rows.length - 1];
-    return `<div class="pitch">
-        <div class="pitch-markings"></div>
-        ${rows.map((row, ri) => {
-            const isGkRow = ri === rows.length - 1 && row.length === 1;
-            return `<div class="pitch-row">${row.map((name, pi) => {
-                const gk = isGkRow || (ri === rows.length - 1 && pi === 0 && row.length <= 2 && /land|keeper|goal/i.test(name));
-                return `<span class="pitch-player${gk ? " gk" : ""}">${esc(displayPlayerName(name))}</span>`;
-            }).join("")}</div>`;
-        }).join("")}
+    return `<div class="pitch-pro">
+        <div class="pitch-pro-field"></div>
+        <div class="pitch-pro-box-top"></div>
+        <div class="pitch-pro-box-bottom"></div>
+        <div class="pitch-pro-inner">
+            ${rows.map((row, ri) => {
+                const isGk = ri === 0 && row.length === 1;
+                return `<div class="pitch-pro-line">${row.map((p, pi) => {
+                    const gk = isGk || (ri === 0 && /вратар|nyland|keeper|goal/i.test(p.name || ""));
+                    return `<div class="pitch-pro-player">
+                        <div class="pitch-pro-dot${gk ? " gk" : ""}"></div>
+                        <div class="pitch-pro-name">${esc(shortPlayerName(p.name))}</div>
+                    </div>`;
+                }).join("")}</div>`;
+            }).join("")}
+        </div>
     </div>`;
 }
 
 function renderFormationHTML(parsed) {
     if (!parsed.rows?.length) return "";
-    let html = "";
+    let html = `<div class="formation-card-body">`;
     if (parsed.scheme) {
         html += `<div class="formation-scheme-badge">${esc(parsed.scheme)}</div>`;
     }
     html += renderFormationPitch(parsed.rows);
+    html += `</div>`;
     if (parsed.tactics?.length) {
         html += `<div class="formation-tactics"><strong>Тактическа идея</strong><ul>
             ${parsed.tactics.map(t => `<li>${formatInline(t)}</li>`).join("")}
@@ -518,8 +615,9 @@ function renderFormationHTML(parsed) {
 
 function tryRenderFormation(text) {
     const parsed = parseFormationContent(text);
-    const playerCount = parsed.rows.reduce((n, r) => n + r.length, 0);
-    if (parsed.rows.length < 1 || playerCount < 3) return null;
+    const playerCount = parsed.players?.length || parsed.rows.reduce((n, r) => n + r.length, 0);
+    if (playerCount < 3 && !parsed.rows.length) return null;
+    if (!parsed.rows.length) return null;
     return renderFormationHTML(parsed);
 }
 
