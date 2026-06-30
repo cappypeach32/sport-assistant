@@ -28,6 +28,7 @@ from data.director.prematch_engine import PreMatchEngine, _is_live, _is_ns, _gpt
 
 # Phase 3 — Live Win Probability (removed from UI — stream-only assistant)
 from data.director.broadcast_package import build_halftime_package, build_fulltime_package
+from data.director.prep_kit import build_prep_kit
 
 
 # =====================================================
@@ -95,6 +96,7 @@ latest_commentary:   list  = []   # list of { minute, title, text }
 _last_ht_status:     str   = ""
 _last_ft_status:     str   = ""
 _postmatch_gpt_spawned: set = set()  # fixture_ids with GPT task already started
+_prep_gpt_spawned: set = set()       # prep page GPT tasks (independent of active match)
 _last_goal_count:    int   = 0    # detect goals for forced commentary refresh
 _last_prematch_refresh: dict = {}  # fixture_id → last background refresh ts
 PREMATCH_REFRESH_INTERVAL = 1800   # 30 min — refresh prematch data for active match
@@ -1077,6 +1079,117 @@ def commentator_view(request: Request):
     return HTMLResponse(
         jinja_env.get_template("commentator.html").render(request=request)
     )
+
+
+@app.get("/overlay/prep", response_class=HTMLResponse)
+def prep_view(request: Request):
+    """Stream prep kit — research upcoming matches without going live."""
+    return HTMLResponse(
+        jinja_env.get_template("prep.html").render(request=request)
+    )
+
+
+# =====================================================
+# STREAM PREP KIT API
+# =====================================================
+
+def _match_dict_from_prematch(fixture_id: int, result: dict) -> dict:
+    data = result.get("data") or {}
+    meta = result.get("meta") or {}
+    return {
+        "raw_id":      fixture_id,
+        "home":        data.get("home") or meta.get("home_name", ""),
+        "away":        data.get("away") or meta.get("away_name", ""),
+        "competition": data.get("league") or meta.get("league_name", ""),
+        "status":      "Not Started",
+        "status_short": "NS",
+        "start_time":  meta.get("date") or data.get("date", ""),
+    }
+
+
+def _prep_needs_gpt(data: dict) -> bool:
+    if not data:
+        return False
+    if data.get("gpt_guide_pending") and not data.get("gpt_narrative"):
+        return True
+    if data.get("stream_facts_gpt_pending") and data.get("stream_facts"):
+        return True
+    return False
+
+
+async def _run_prep_gpt_async(fixture_id: int):
+    """Generate GPT guide + stream facts for prep cache (broadcast if same active match)."""
+    global latest_prematch, _prep_gpt_spawned
+    print(f"[PREP] GPT task started for fixture {fixture_id}")
+    try:
+        loop = asyncio.get_running_loop()
+        gpt_result = await loop.run_in_executor(
+            None, prematch_engine.generate_gpt_phase, fixture_id,
+        )
+        if gpt_result and active_match and active_match.get("raw_id") == fixture_id:
+            latest_prematch = gpt_result
+            payload = build_overlay_response(
+                active_match,
+                intelligence=latest_intelligence or {},
+                prematch=latest_prematch,
+                live_narrative=latest_narrative,
+                halftime_analysis=latest_halftime,
+                postmatch_summary=latest_postmatch,
+                postmatch_gpt_pending=latest_postmatch_gpt_pending,
+            )
+            payload["commentary_queue"] = latest_commentary
+            await broadcast(payload)
+            print(f"[PREP] GPT done — also broadcast to active overlay for {fixture_id}")
+        else:
+            print(f"[PREP] GPT done for fixture {fixture_id}")
+    except Exception as e:
+        import traceback
+        print(f"[PREP] GPT error: {e}")
+        traceback.print_exc()
+    finally:
+        _prep_gpt_spawned.discard(fixture_id)
+
+
+def _spawn_prep_gpt_if_needed(fixture_id: int, data: dict) -> None:
+    if not _prep_needs_gpt(data):
+        return
+    if fixture_id in _prep_gpt_spawned:
+        return
+    _prep_gpt_spawned.add(fixture_id)
+    asyncio.create_task(_run_prep_gpt_async(fixture_id))
+
+
+@app.get("/prep/{fixture_id}")
+async def get_prep_kit(fixture_id: int, refresh: bool = False):
+    """
+    Load stream prep kit for a fixture without selecting it as the active live match.
+    Triggers background GPT when guide/facts are not yet polished.
+    """
+    if refresh:
+        prematch_engine._cache.pop(fixture_id, None)
+
+    match_stub = {"raw_id": fixture_id}
+    loop = asyncio.get_running_loop()
+
+    cached = prematch_engine.get_cached_prematch(fixture_id)
+    if cached and cached.get("available") and not refresh:
+        result = cached
+    else:
+        result = await loop.run_in_executor(
+            None, prematch_engine.analyze_fast, fixture_id, match_stub,
+        )
+
+    if not result.get("available"):
+        return {"ok": False, "error": "Анализът не е наличен за този мач"}
+
+    data = result.get("data") or {}
+    _spawn_prep_gpt_if_needed(fixture_id, data)
+
+    return {
+        "ok":    True,
+        "match": _match_dict_from_prematch(fixture_id, result),
+        "kit":   build_prep_kit(result),
+    }
 
 
 # =====================================================
