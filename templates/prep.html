@@ -300,7 +300,6 @@ async function selectPrepMatch(id) {
     state.selectedMatch = state.matches.find(m => String(m.raw_id) === String(id)) || null;
     renderMatchList();
     await loadKit(id, true);
-    startPoll(id);
 }
 
 async function loadKit(fixtureId, showSpinner) {
@@ -310,7 +309,7 @@ async function loadKit(fixtureId, showSpinner) {
     content.style.display = "block";
 
     if (showSpinner) {
-        content.innerHTML = '<div class="kit-loading"><div class="spinner"></div> Генериране на AI анализ...</div>';
+        content.innerHTML = '<div class="kit-loading large"><div class="spinner"></div><div>Генериране на детайлен AI анализ…<br/><span style="color:var(--muted);font-size:0.9rem">Моля изчакай — отнема до 1–2 минути</span></div></div>';
     }
 
     try {
@@ -520,7 +519,7 @@ function renderKit(match, kit) {
     if (loading) {
         html += `<div class="kit-loading large">
             <div class="spinner"></div>
-            <div>Генериране на детайлен AI анализ…<br/><span style="color:var(--muted);font-size:0.9rem">Обикновено отнема до 1 минута</span></div>
+            <div>Генериране на детайлен AI анализ…<br/><span style="color:var(--muted);font-size:0.9rem">Обикновено отнема до 1–2 минути</span></div>
         </div>`;
     } else if (kit.prep_ai_unavailable) {
         html += `<div class="warn-banner">⚠️ AI анализът не е наличен (липсва OpenAI ключ на сървъра).</div>`;

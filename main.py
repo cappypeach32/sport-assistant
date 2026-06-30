@@ -29,6 +29,7 @@ from data.director.prematch_engine import PreMatchEngine, _is_live, _is_ns, _gpt
 # Phase 3 — Live Win Probability (removed from UI — stream-only assistant)
 from data.director.broadcast_package import build_halftime_package, build_fulltime_package
 from data.director.prep_kit import build_prep_kit
+from data.director.prematch_engine import _gpt_available
 
 
 # =====================================================
@@ -1110,10 +1111,18 @@ def _match_dict_from_prematch(fixture_id: int, result: dict) -> dict:
     }
 
 
-def _prep_needs_gpt(data: dict) -> bool:
-    if not data:
+def _prep_needs_sync_gpt(data: dict) -> bool:
+    if not _gpt_available or not data:
         return False
-    return bool(data.get("prep_editorial_pending") and not data.get("prep_editorial"))
+    if data.get("prep_editorial"):
+        return False
+    if data.get("prep_editorial_gpt_failed"):
+        return False
+    return True
+
+
+def _prep_needs_gpt(data: dict) -> bool:
+    return _prep_needs_sync_gpt(data)
 
 
 def _overlay_gpt_needs_warm(data: dict) -> bool:
@@ -1203,7 +1212,7 @@ async def get_prep_kit(fixture_id: int, refresh: bool = False):
     Triggers background GPT when guide/facts are not yet polished.
     """
     if refresh:
-        prematch_engine._cache.pop(fixture_id, None)
+        prematch_engine.clear_fixture_cache(fixture_id)
         _prep_gpt_spawned.discard(fixture_id)
         _prep_gpt_started.pop(fixture_id, None)
 
@@ -1222,7 +1231,20 @@ async def get_prep_kit(fixture_id: int, refresh: bool = False):
         return {"ok": False, "error": "Анализът не е наличен за този мач"}
 
     data = result.get("data") or {}
-    _spawn_prep_gpt_if_needed(fixture_id, data)
+    if _prep_needs_sync_gpt(data):
+        print(f"[PREP] Sync GPT for fixture {fixture_id}…")
+        gpt_result = await loop.run_in_executor(
+            None, prematch_engine.generate_prep_gpt_phase, fixture_id,
+        )
+        if gpt_result:
+            result = gpt_result
+            data = result.get("data") or {}
+        elif prematch_engine.get_cached_prematch(fixture_id):
+            result = prematch_engine.get_cached_prematch(fixture_id)
+            data = result.get("data") or {}
+
+    if _overlay_gpt_needs_warm(data):
+        asyncio.create_task(_run_overlay_gpt_warm_async(fixture_id))
 
     return {
         "ok":    True,

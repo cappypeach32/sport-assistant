@@ -3,6 +3,7 @@ import re
 import hashlib
 import json
 import time
+import threading
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -157,7 +158,18 @@ class PreMatchEngine:
         self._stream_facts_cache: dict = {}    # fixture_id → {ts, facts: list[str]}
         self._prep_editorial_cache: dict = {}  # fixture_id → {ts, text}
         self._events_cache: dict = {}   # fixture_id → events list
+        self._prep_gpt_locks: dict = {}  # fixture_id → threading.Lock
         self._fixture_players_cache: dict = {}  # fixture_id → fixtures/players response
+
+    def clear_fixture_cache(self, fixture_id: int) -> None:
+        """Drop prematch + prep editorial cache for a fixture (refresh)."""
+        self._cache.pop(fixture_id, None)
+        self._prep_editorial_cache.pop(fixture_id, None)
+
+    def _prep_lock(self, fixture_id: int) -> threading.Lock:
+        if fixture_id not in self._prep_gpt_locks:
+            self._prep_gpt_locks[fixture_id] = threading.Lock()
+        return self._prep_gpt_locks[fixture_id]
 
     def _cache_ttl_for(self, result: dict) -> int:
         data = result.get("data", {}) if isinstance(result.get("data"), dict) else {}
@@ -2155,10 +2167,11 @@ H2H контекст + какво означава за двата отбора 
             text = self._clean_gpt_placeholders(
                 (resp.choices[0].message.content or "").strip()
             )
-            if text and len(text) > 200:
+            if text and len(text) > 100:
                 self._store_prep_editorial_cache(fixture_id, text)
                 print(f"[PREP] Editorial GPT done for fixture {fixture_id} ({len(text)} chars)")
                 return text
+            print(f"[PREP] Editorial GPT too short for {fixture_id}: {len(text)} chars")
         except Exception as e:
             print(f"[PREP] Editorial GPT failed for {fixture_id}: {e}")
         return ""
@@ -3014,49 +3027,54 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
 
     def generate_prep_gpt_phase(self, fixture_id: int) -> dict | None:
         """
-        Fast GPT for Stream Prep: prep editorial only (no broadcast guide).
+        GPT for Stream Prep: prep editorial only.
+        Blocks until done, failed, or timeout (called synchronously from /prep).
         """
         if not _gpt_available:
             return None
 
-        cached = self._cache.get(fixture_id)
-        if not cached:
-            return None
+        lock = self._prep_lock(fixture_id)
+        with lock:
+            cached = self._cache.get(fixture_id)
+            if not cached:
+                return None
 
-        result = cached["data"]
-        data   = result.get("data", {})
+            result = cached["data"]
+            data   = result.get("data", {})
 
-        self._apply_cached_prep_editorial(fixture_id, data)
+            self._apply_cached_prep_editorial(fixture_id, data)
 
-        needs_prep = bool(data.get("prep_editorial_pending") and not data.get("prep_editorial"))
+            needs_prep = bool(
+                not data.get("prep_editorial") and not data.get("prep_editorial_gpt_failed")
+            )
 
-        if not needs_prep:
+            if not needs_prep:
+                result["data"] = data
+                self._cache[fixture_id] = {"ts": time.time(), "data": result}
+                return result
+
+            prep_text = ""
+            try:
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    fut = pool.submit(self._generate_prep_editorial_gpt, fixture_id, data)
+                    prep_text = fut.result(timeout=GPT_PREP_TIMEOUT) or ""
+            except Exception as e:
+                print(f"[PREP] Editorial GPT timeout/error for {fixture_id}: {e}")
+
+            if prep_text:
+                data["prep_editorial"] = prep_text
+                data["prep_editorial_draft"] = ""
+                data["prep_editorial_pending"] = False
+                data.pop("prep_editorial_gpt_failed", None)
+            else:
+                data["prep_editorial_pending"] = False
+                data["prep_editorial_gpt_failed"] = True
+                data["prep_editorial_draft"] = ""
+                print(f"[PREP] Editorial GPT gave no result for {fixture_id}")
+
             result["data"] = data
             self._cache[fixture_id] = {"ts": time.time(), "data": result}
             return result
-
-        prep_text = ""
-        try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                fut = pool.submit(self._generate_prep_editorial_gpt, fixture_id, data)
-                prep_text = fut.result(timeout=GPT_PREP_TIMEOUT) or ""
-        except Exception as e:
-            print(f"[PREP] Editorial GPT timeout/error for {fixture_id}: {e}")
-
-        if prep_text:
-            data["prep_editorial"] = prep_text
-            data["prep_editorial_draft"] = ""
-            data["prep_editorial_pending"] = False
-            data.pop("prep_editorial_gpt_failed", None)
-        else:
-            data["prep_editorial_pending"] = False
-            data["prep_editorial_gpt_failed"] = True
-            data["prep_editorial_draft"] = ""
-            print(f"[PREP] Editorial GPT gave no result for {fixture_id}")
-
-        result["data"] = data
-        self._cache[fixture_id] = {"ts": time.time(), "data": result}
-        return result
 
     def generate_overlay_gpt_phase(self, fixture_id: int) -> dict | None:
         """GPT for live overlay: broadcast guide + polished stream facts."""
