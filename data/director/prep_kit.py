@@ -9,6 +9,16 @@ from data.director.name_translit import (
     latin_name_to_bg,
 )
 
+_stats_collector = None
+
+
+def _get_stats_collector():
+    global _stats_collector
+    if _stats_collector is None:
+        from data.director.live_stats_collector import LiveStatsCollector
+        _stats_collector = LiveStatsCollector()
+    return _stats_collector
+
 
 PREP_SECTION_ICONS = {
     "ЗАГЛАВИЕ": "🏆",
@@ -131,17 +141,318 @@ def _enrich_player_names_in_text(text: str, name_map: dict[str, str]) -> str:
     return re.sub(r"\b[A-ZÀ-ÖØ-Þ][a-zà-ÿ'\-]{1,}\b", _fix, text)
 
 
+PLACEHOLDER_NAMES = frozenset({
+    "име", "name", "играч", "player", "n/a", "na", "tbd", "?", "—", "-", "xxx",
+})
+
+
+def is_placeholder_name(name: str) -> bool:
+    n = (name or "").strip().lower()
+    if n in PLACEHOLDER_NAMES:
+        return True
+    if re.match(r"^\d+\s*ред", n):
+        return True
+    return False
+
+
+def _extract_scheme(text: str) -> str:
+    m = re.search(r"(?:вероятна\s+)?схема\s*:?\s*([\d]+(?:\s*[-/]\s*[\d]+)+)", text or "", re.I)
+    return m.group(1).replace(" ", "") if m else ""
+
+
+def _extract_team_subsection(body: str, team_label: str) -> str:
+    if not body or not team_label:
+        return ""
+    label_l = team_label.lower().strip()
+    for chunk in re.split(r"(?=^### )", body, flags=re.M):
+        chunk = chunk.strip()
+        if not chunk.startswith("### "):
+            continue
+        header = chunk.split("\n", 1)[0][4:].strip().lower()
+        if header == label_l or label_l in header or header in label_l:
+            return chunk.split("\n", 1)[1] if "\n" in chunk else ""
+        # "Ivory Coast" vs "Кот д'Ивоar" — match first word
+        if label_l.split()[0][:4] == header.split()[0][:4]:
+            return chunk.split("\n", 1)[1] if "\n" in chunk else ""
+    return ""
+
+
+def _parse_formation_player_list(section_text: str, name_map: dict[str, str]) -> list[str]:
+    players: list[str] = []
+    if not section_text:
+        return players
+
+    in_tactics = False
+    for line in section_text.split("\n"):
+        t = line.strip()
+        if not t:
+            continue
+        if re.match(r"^основна\s+тактическ", t, re.I):
+            in_tactics = True
+            continue
+        if in_tactics:
+            continue
+        if re.search(r"(?:вероятна\s+)?схема\s*:", t, re.I):
+            continue
+        if re.match(r"^състав", t, re.I):
+            continue
+        if t.startswith("[") and t.endswith("]"):
+            continue
+        if re.match(r"^[•\-\*]", t):
+            continue
+
+        role_m = re.match(
+            r"^(?:вратар|защитник|халф|нападател|полузащитник|def|mid|fwd|gk)\s*:\s*(.+)$",
+            t,
+            re.I,
+        )
+        if role_m:
+            t = role_m.group(1).strip()
+
+        name = re.sub(r"\*\*", "", t).strip()
+        name = re.sub(r"\([^)]*\)", "", name).strip()
+        if not name or is_placeholder_name(name):
+            continue
+        if name in name_map:
+            players.append(name_map[name])
+        elif name_map.get(name):
+            players.append(name_map[name])
+        else:
+            players.append(latin_name_to_bg(name) if re.search(r"[a-zA-Z]", name) else name)
+        if len(players) >= 11:
+            break
+
+    return players
+
+
+def _resolve_player_bg(latin: str, name_map: dict[str, str]) -> str:
+    latin = (latin or "").strip()
+    if not latin:
+        return ""
+    if latin in name_map:
+        return name_map[latin]
+    surname = latin.split()[-1].lower().strip(".")
+    for key, bg in name_map.items():
+        if key.lower().split()[-1].strip(".") == surname:
+            return bg
+    for key, bg in name_map.items():
+        if surname and surname in key.lower():
+            return bg
+    return latin_name_to_bg(latin)
+
+
+def _scheme_lines(scheme: str) -> list[int]:
+    m = re.match(r"([\d]+(?:-[\d]+)+)", (scheme or "").replace(" ", ""))
+    if not m:
+        return [1, 4, 3, 3]
+    parts = [int(x) for x in m.group(1).split("-")]
+    return [1] + parts
+
+
+def _probable_xi_from_squad(
+    squad: list[dict],
+    scheme: str,
+    priority_names: list[str],
+    name_map: dict[str, str],
+    priority_latin: list[str] | None = None,
+) -> list[str]:
+    if not squad:
+        return []
+
+    lines = _scheme_lines(scheme)
+    outfield = lines[1:]
+    if len(outfield) == 3:
+        need_def, need_mid, need_att = outfield
+    elif len(outfield) == 4:
+        need_def, need_mid, need_att = outfield[0], outfield[1] + outfield[2], outfield[3]
+    else:
+        need_def = outfield[0] if outfield else 4
+        need_mid = sum(outfield[1:-1]) if len(outfield) > 2 else 3
+        need_att = outfield[-1] if len(outfield) > 1 else 3
+
+    by_pos: dict[str, list[dict]] = {
+        "Goalkeeper": [], "Defender": [], "Midfielder": [], "Attacker": [],
+    }
+    pri = {n.lower().strip() for n in priority_names if n}
+    pri_surnames = {n.split()[-1] for n in pri if n}
+    for latin in priority_latin or []:
+        if latin:
+            pri_surnames.add(latin.split()[-1].lower().strip("."))
+
+    for p in squad:
+        pos = p.get("position") or "Midfielder"
+        if pos not in by_pos:
+            pos = "Midfielder"
+        latin = (p.get("name") or "").strip()
+        if not latin:
+            continue
+        bg = _resolve_player_bg(latin, name_map)
+        by_pos[pos].append({"latin": latin, "bg": bg})
+
+    for pos in by_pos:
+        by_pos[pos].sort(
+            key=lambda x: (
+                0 if x["bg"].lower() in pri or x["latin"].lower() in pri
+                or x["latin"].split()[-1].lower().strip(".") in pri_surnames
+                or x["bg"].split()[-1].lower() in pri_surnames else 1,
+                x["bg"],
+            )
+        )
+
+    picked: list[str] = []
+
+    def _take(pos: str, n: int) -> None:
+        count = 0
+        for x in by_pos[pos]:
+            if x["bg"] not in picked:
+                picked.append(x["bg"])
+                count += 1
+                if count >= n:
+                    break
+
+    _take("Goalkeeper", 1)
+    _take("Defender", need_def)
+    _take("Midfielder", need_mid)
+    _take("Attacker", need_att)
+
+    for pos in ("Defender", "Midfielder", "Attacker", "Goalkeeper"):
+        for x in by_pos[pos]:
+            if x["bg"] not in picked and len(picked) < 11:
+                picked.append(x["bg"])
+
+    return picked[:11]
+
+
+def _squad_from_lineups(side: str, lineups: dict | None, name_map: dict[str, str]) -> dict | None:
+    side_data = (lineups or {}).get(side) or {}
+    starting = side_data.get("starting") or []
+    if len(starting) < 8:
+        return None
+    players = []
+    for p in starting[:11]:
+        latin = (p.get("name") or "").strip()
+        if not latin:
+            continue
+        players.append(_resolve_player_bg(latin, name_map))
+    if len(players) < 8:
+        return None
+    scheme = (side_data.get("formation") or "").replace(" ", "")
+    return {"scheme": scheme, "players": players, "source": "api"}
+
+
+def _names_from_key_players_section(prep_sections: list[dict], team_label: str, name_map: dict[str, str]) -> list[str]:
+    body = ""
+    for sec in prep_sections:
+        if (sec.get("title") or "").upper() == "КЛЮЧОВИ ИГРАЧИ":
+            body = sec.get("body") or ""
+            break
+    if not body:
+        return []
+
+    section = _extract_team_subsection(body, team_label)
+    names: list[str] = []
+    for line in section.split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^[⭐\*]+\s*(.+?)(?:\s*[-–—:]|$)", line)
+        if m:
+            raw = re.sub(r"\*\*", "", m.group(1)).strip()
+            if raw and not is_placeholder_name(raw):
+                names.append(name_map.get(raw) or latin_name_to_bg(raw))
+    return names
+
+
+def build_formation_squads(
+    data: dict,
+    meta: dict,
+    lineups: dict | None,
+    prep_sections: list[dict],
+    team_squads: dict | None = None,
+) -> dict:
+    """Best available XI per team: API lineups → GPT list → key players."""
+    home = data.get("home") or meta.get("home_name", "")
+    away = data.get("away") or meta.get("away_name", "")
+    name_map = build_player_name_map(data)
+
+    schemes_body = ""
+    for sec in prep_sections:
+        if (sec.get("title") or "").upper() == "ВЕРОЯТНИ СХЕМИ":
+            schemes_body = sec.get("body") or ""
+            break
+
+    squads: dict = {}
+    for side, label in (("home", home), ("away", away)):
+        api = _squad_from_lineups(side, lineups, name_map)
+        section_text = _extract_team_subsection(schemes_body, label)
+        gpt_players = _parse_formation_player_list(section_text, name_map)
+        gpt_scheme = _extract_scheme(section_text)
+        default_scheme = "4-2-3-1" if side == "away" else "4-3-3"
+        scheme = gpt_scheme or default_scheme
+
+        real_gpt = [p for p in gpt_players if not is_placeholder_name(p)]
+
+        extra = _names_from_key_players_section(prep_sections, label, name_map)
+        kp = [
+            name_map.get(p.get("name_latin", "")) or p.get("name", "")
+            for p in (data.get("top_scorers") or {}).get(side) or []
+        ]
+        priority = [n for n in extra + kp if n and not is_placeholder_name(n)]
+        priority_latin = [
+            (p.get("name_latin") or p.get("name") or "").strip()
+            for p in (data.get("top_scorers") or {}).get(side) or []
+        ]
+        roster = ((team_squads or {}).get(side) or [])
+        probable = _probable_xi_from_squad(
+            roster, scheme, priority, name_map, priority_latin=priority_latin,
+        ) if roster else []
+
+        if api and len(api["players"]) >= 8:
+            squad = api
+            if gpt_scheme:
+                squad["scheme"] = gpt_scheme
+        elif len(probable) >= 8:
+            squad = {"scheme": scheme, "players": probable, "source": "roster"}
+        elif len(real_gpt) >= 8:
+            squad = {"scheme": scheme, "players": real_gpt, "source": "gpt"}
+        elif api:
+            squad = api
+        else:
+            merged = []
+            for n in real_gpt + priority:
+                if n and n not in merged and not is_placeholder_name(n):
+                    merged.append(n)
+            if len(merged) >= 5:
+                squad = {
+                    "scheme": scheme,
+                    "players": merged,
+                    "source": "partial",
+                }
+            else:
+                continue
+
+        squad["team_label"] = label
+        squad["players"] = (squad.get("players") or [])[:11]
+        squads[side] = squad
+
+    return squads
+
+
 def _bg_key_players(top_scorers: dict, name_map: dict[str, str]) -> dict:
     out: dict = {"home": [], "away": []}
     for side in ("home", "away"):
         for p in (top_scorers or {}).get(side) or []:
             latin = (p.get("name") or "?").strip()
-            bg = name_map.get(latin) or latin_name_to_bg(latin)
+            bg = _resolve_player_bg(latin, name_map)
             out[side].append({**p, "name": bg, "name_latin": latin})
     return out
 
 
-def build_prep_kit(prematch_result: dict) -> dict:
+def build_prep_kit(
+    prematch_result: dict,
+    lineups: dict | None = None,
+    team_squads: dict | None = None,
+) -> dict:
     """Turn prematch engine result into a stream-prep kit for the UI."""
     if not prematch_result or not prematch_result.get("available"):
         return {"ready": False}
@@ -172,8 +483,24 @@ def build_prep_kit(prematch_result: dict) -> dict:
     inj_home = injuries.get("home") or []
     inj_away = injuries.get("away") or []
 
+    fixture_id = meta.get("fixture_id") or data.get("fixture_id")
+    if team_squads is None:
+        col = _get_stats_collector()
+        team_squads = {
+            "home": col.get_team_squad(meta.get("home_id") or 0),
+            "away": col.get_team_squad(meta.get("away_id") or 0),
+        }
+    if lineups is None and fixture_id:
+        col = _get_stats_collector()
+        lineups = col.get_lineups(int(fixture_id), home, away)
+
+    formation_squads = build_formation_squads(
+        data, meta, lineups, prep_sections, team_squads=team_squads,
+    )
+
     return {
         "ready": True,
+        "teams": {"home": home, "away": away},
         "match_label": f"{home} срещу {away}",
         "headline": _prep_headline(prep_sections, f"{home} срещу {away} — детайлен анализ"),
         "competition": data.get("league") or meta.get("league_name", ""),
@@ -192,6 +519,7 @@ def build_prep_kit(prematch_result: dict) -> dict:
             "is_draft": False,
         },
         "player_name_map": name_map,
+        "formation_squads": formation_squads,
         "stream_facts": data.get("stream_facts") or [],
         "form": {
             "home": _form_summary(data.get("home_stats") or {}, data.get("home_form", "")),

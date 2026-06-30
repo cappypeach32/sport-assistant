@@ -1246,10 +1246,25 @@ async def get_prep_kit(fixture_id: int, refresh: bool = False):
     if _overlay_gpt_needs_warm(data):
         asyncio.create_task(_run_overlay_gpt_warm_async(fixture_id))
 
+    meta = result.get("meta") or {}
+    home_name = data.get("home") or meta.get("home_name", "")
+    away_name = data.get("away") or meta.get("away_name", "")
+    home_id = meta.get("home_id")
+    away_id = meta.get("away_id")
+
+    lineups, squad_home, squad_away = await asyncio.gather(
+        loop.run_in_executor(
+            None, stats_collector.get_lineups, fixture_id, home_name, away_name,
+        ),
+        loop.run_in_executor(None, stats_collector.get_team_squad, home_id or 0),
+        loop.run_in_executor(None, stats_collector.get_team_squad, away_id or 0),
+    )
+    team_squads = {"home": squad_home, "away": squad_away}
+
     return {
         "ok":    True,
         "match": _match_dict_from_prematch(fixture_id, result),
-        "kit":   build_prep_kit(result),
+        "kit":   build_prep_kit(result, lineups=lineups, team_squads=team_squads),
     }
 
 

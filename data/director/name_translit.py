@@ -25,6 +25,18 @@ KNOWN_NAMES: dict[str, str] = {
     "antoine nusa": "Антоан Нуса",
     "alexander sorloth": "Александър Сорлот",
     "felix myhre": "Феликс Мюре",
+    "wilfried zaha": "Уилфрид Заха",
+    "nicolas pepe": "Никола Пепе",
+    "sebastien haller": "Себастиен Халер",
+    "simon adingra": "Симон Адингра",
+    "jean-philippe krasso": "Жан-Филип Красо",
+    "yahia fofana": "Яхия Фофана",
+    "ørjan nyland": "Орян Ниланд",
+    "sander berge": "Сандер Берге",
+    "fredrik aursnes": "Фредрик Аурснес",
+    "julian ryerson": "Юлиан Райерсон",
+    "kristoffer ajer": "Кристофер Айер",
+    "thelo aasgaard": "Тело Аасгаард",
 }
 
 _CHAR_MAP = {

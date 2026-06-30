@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
+from data.director.name_translit import latin_name_to_bg
+
 load_dotenv()
 
 API_KEY  = os.getenv("API_FOOTBALL_KEY")
@@ -473,6 +475,7 @@ class PreMatchEngine:
             return {}
         f = raw[0]
         return {
+            "fixture_id":   fixture_id,
             "home_id":      f["teams"]["home"]["id"],
             "away_id":      f["teams"]["away"]["id"],
             "home_name":    f["teams"]["home"]["name"],
@@ -2073,6 +2076,14 @@ class PreMatchEngine:
         home_adv = ", ".join((data.get("home_advantages") or [])[:5]) or "—"
         away_adv = ", ".join((data.get("away_advantages") or [])[:5]) or "—"
 
+        def _lineup_hint(side: str) -> str:
+            players = (data.get("top_scorers") or {}).get(side) or []
+            names = [
+                latin_name_to_bg(p.get("name", ""))
+                for p in players[:6] if p.get("name")
+            ]
+            return ", ".join(names) if names else "типични играчи на отбора"
+
         prompt = f"""Напиши ДЕТАЙЛЕН предмачов анализ за БЪЛГАРСКИ футболен стрийм екип.
 Тон: експертен, жив, като за подготовка преди ефир — НЕ суха статистика.
 Език: български. Имена на играчи ВИНАГИ на кирилица (пример: Erling Haaland → Ерлинг Хааланд, Martin Ødegaard → Мартин Йодегор). Отбори: {home} и {away}.
@@ -2113,13 +2124,16 @@ H2H общо: {data.get('h2h_count', 0)} | средно голове: {data.get(
 ## ВЕРОЯТНИ СХЕМИ
 ### {home}
 Вероятна схема: 4-3-3
-Състав (11 играча, от вратар към нападение — по едно име на ред, кирилица):
-Име
-Име
-(11 реда общо)
+Състав — 11 РЕАЛНИ имена на кирилица (от вратар към нападение), по едно име на ред.
+Примерни играчи за {home}: {_lineup_hint('home')} — добави още до пълен състав от 11.
+ЗАБРАНЕНО: думата „Име“, placeholder, латиница в състава.
 Основна тактическа идея — 3 bullets.
 ### {away}
-Същият формат. Без [скоби] и без ASCII диаграми — само списък с имена + схема.
+Вероятна схема: 4-2-3-1
+Състав — 11 РЕАЛНИ имена на кирилица, по едно на ред.
+Примерни играчи за {away}: {_lineup_hint('away')} — добави още до пълен състав от 11.
+ЗАБРАНЕНО: placeholder „Име“.
+Основна тактическа идея — 3 bullets.
 
 ## КЛЮЧОВИ ИГРАЧИ
 ### {home}

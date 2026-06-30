@@ -42,6 +42,7 @@ class LiveStatsCollector:
     def __init__(self):
         self._stats_cache: dict = {}
         self._lineups_cache: dict = {}
+        self._squad_cache: dict = {}
         self._events_cache: dict = {}
 
     # --------------------------------------------------
@@ -194,6 +195,28 @@ class LiveStatsCollector:
 
         self._lineups_cache[cache_key] = lineups
         return lineups
+
+    def get_team_squad(self, team_id: int) -> list[dict]:
+        """Full team roster from API-Football (for probable XI before lineups drop)."""
+        if not team_id:
+            return []
+        cache_key = f"squad:{team_id}"
+        if cache_key in self._squad_cache:
+            return self._squad_cache[cache_key]
+
+        raw = self._get("players/squads", {"team": team_id})
+        players: list[dict] = []
+        if raw:
+            for p in raw[0].get("players") or []:
+                players.append({
+                    "id":       p.get("id"),
+                    "name":     p.get("name") or "",
+                    "position": p.get("position") or "",
+                })
+
+        if players:
+            self._squad_cache[cache_key] = players
+        return players
 
     # --------------------------------------------------
     # LIVE EVENTS

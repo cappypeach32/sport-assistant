@@ -463,6 +463,11 @@ function cleanPlayerName(s) {
     return (s || "").replace(/\*\*/g, "").replace(/\([^)]*\)/g, "").replace(/^\d+[\.\)]\s*/, "").trim();
 }
 
+function isPlaceholderName(name) {
+    const n = (name || "").trim().toLowerCase();
+    return !n || ["име", "name", "играч", "player", "n/a", "tbd", "xxx", "—", "-"].includes(n);
+}
+
 function isPlayerToken(w) {
     if (!w || w.length < 2 || w.length > 26) return false;
     if (/^\[/.test(w) || /^[\d]+$/.test(w)) return false;
@@ -475,23 +480,36 @@ function isPlayerToken(w) {
 function parseNameLine(line) {
     let t = (line || "").trim();
     if (!t) return [];
-    t = t.replace(/\[([^\]]+)\]/g, " ").replace(/^[•\-\*]\s*/, "").trim();
-    if (!t) return [];
+    t = t.replace(/^[•\-\*⭐]+\s*/, "").trim();
+    if (/^(основна|тактическ|вероятна\s+схема|състав)/i.test(t)) return [];
 
-    if (t.includes(",")) {
-        return t.split(",").map(cleanPlayerName).filter(n => n && isPlayerToken(n.split(/\s+/)[0]) || n.length >= 2);
+    const roleMatch = t.match(
+        /^(?:вратар|защитник|халф|нападател|полузащитник|gk|def|mid|fwd)[^:]*:\s*(.+)$/i
+    );
+    if (roleMatch) {
+        const name = cleanPlayerName(roleMatch[1]);
+        return name && !isPlaceholderName(name) ? [name] : [];
     }
 
-    const tokens = t.split(/\s+/).filter(isPlayerToken);
-    if (tokens.length) return tokens.map(cleanPlayerName);
+    if (t.includes(",") && t.split(",").every(p => cleanPlayerName(p).length <= 28)) {
+        return t.split(",")
+            .map(cleanPlayerName)
+            .filter(n => n && !isPlaceholderName(n) && n.length >= 2);
+    }
 
-    const single = cleanPlayerName(t);
-    if (single && single.length >= 2 && !/^(основна|тактическ)/i.test(single)) return [single];
+    const single = cleanPlayerName(t.replace(/\[([^\]]+)\]/g, "").trim());
+    if (single && single.length >= 2 && !isPlaceholderName(single)) {
+        const beforeDash = single.split(/\s*[-–—]\s+/)[0].trim();
+        if (beforeDash.length >= 2 && !/^(вратар|защитник|халф|нападател)/i.test(beforeDash)) {
+            return [beforeDash];
+        }
+    }
     return [];
 }
 
 function shortPlayerName(full) {
     const n = displayPlayerName(full);
+    if (!n || isPlaceholderName(n)) return "";
     const parts = n.split(/\s+/).filter(Boolean);
     if (parts.length > 1 && parts[parts.length - 1].length >= 2) return parts[parts.length - 1];
     return n;
@@ -506,26 +524,41 @@ function parseSchemeString(scheme) {
     return [1, ...parts];
 }
 
-function rowsFromSchemeAndPlayers(scheme, players) {
+function schemePlayerCount(scheme) {
     const lines = parseSchemeString(scheme);
-    if (!lines || !players.length) return null;
+    return lines ? lines.reduce((a, b) => a + b, 0) : 11;
+}
+
+function buildFormationRows(scheme, players) {
+    const lines = parseSchemeString(scheme);
+    if (!lines) return null;
     const need = lines.reduce((a, b) => a + b, 0);
-    if (players.length !== need) return null;
+    const xi = players.filter(n => n && !isPlaceholderName(n)).slice(0, need);
+    if (xi.length < 8) return null;
+
     const rows = [];
     let i = 0;
     for (const n of lines) {
-        rows.push(players.slice(i, i + n).map(name => ({ name })));
+        const slice = xi.slice(i, i + n);
+        if (!slice.length) break;
+        rows.push(slice.map(name => ({ name })));
         i += n;
     }
-    return rows;
+    return rows.length ? rows : null;
+}
+
+function rowsFromSchemeAndPlayers(scheme, players) {
+    return buildFormationRows(scheme, players);
 }
 
 function collectPlayersInOrder(text) {
     const players = [];
     const raw = stripCodeFences(text);
     let hitTactics = false;
+    const maxPlayers = schemePlayerCount(extractScheme(text));
 
     for (const line of raw.split("\n")) {
+        if (players.length >= maxPlayers) break;
         const t = line.trim();
         if (!t) continue;
         if (/^основна\s+тактическ/i.test(t)) { hitTactics = true; continue; }
@@ -535,7 +568,10 @@ function collectPlayersInOrder(text) {
         if (/^\[([^\]]+)\](\s*\[[^\]]+\])*\s*$/.test(t)) continue;
 
         for (const name of parseNameLine(t)) {
-            if (name) players.push(name);
+            if (name && !isPlaceholderName(name)) {
+                players.push(name);
+                if (players.length >= maxPlayers) break;
+            }
         }
     }
     return players;
@@ -563,17 +599,8 @@ function parseFormationContent(text) {
     const scheme = extractScheme(text);
     const players = collectPlayersInOrder(text);
     const tactics = collectTactics(text);
-    let rows = rowsFromSchemeAndPlayers(scheme, players);
-
-    if (!rows && players.length >= 8) {
-        const chunk = Math.ceil(players.length / 4);
-        rows = [];
-        for (let i = 0; i < players.length; i += chunk) {
-            rows.push(players.slice(i, i + chunk).map(name => ({ name })));
-        }
-    }
-
-    return { scheme, rows: rows || [], tactics, players };
+    const rows = buildFormationRows(scheme, players);
+    return { scheme, rows: rows || [], tactics, players: players.slice(0, schemePlayerCount(scheme)) };
 }
 
 function renderFormationPitch(rows) {
@@ -613,19 +640,49 @@ function renderFormationHTML(parsed) {
     return html;
 }
 
-function tryRenderFormation(text) {
-    const parsed = parseFormationContent(text);
-    const playerCount = parsed.players?.length || parsed.rows.reduce((n, r) => n + r.length, 0);
-    if (playerCount < 3 && !parsed.rows.length) return null;
-    if (!parsed.rows.length) return null;
-    return renderFormationHTML(parsed);
+function tryRenderFormation(text, teamName, kit, teamIndex) {
+    let squad = resolveFormationSquad(teamName, kit?.formation_squads, kit?.teams);
+    if (!squad?.players?.length && kit?.formation_squads) {
+        const side = teamIndex === 0 ? "home" : teamIndex === 1 ? "away" : null;
+        if (side && kit.formation_squads[side]?.players?.length) {
+            squad = kit.formation_squads[side];
+        }
+    }
+    const scheme = squad?.scheme || extractScheme(text) || "4-3-3";
+    const tactics = collectTactics(text);
+    const need = schemePlayerCount(scheme);
+
+    let players = [];
+    if (squad?.players?.length >= 8) {
+        players = squad.players.slice(0, need);
+    } else {
+        players = collectPlayersInOrder(text).slice(0, need);
+    }
+    players = players.filter(n => n && !isPlaceholderName(n));
+
+    const rows = buildFormationRows(scheme, players);
+    if (!rows) return null;
+    return renderFormationHTML({ scheme, rows, tactics, players });
 }
 
-function renderFormationsSection(body) {
+function resolveFormationSquad(teamName, squads, teams) {
+    if (!squads || !teamName) return null;
+    const t = teamName.toLowerCase().trim();
+    for (const side of ["home", "away"]) {
+        const squad = squads[side];
+        const label = (teams?.[side] || "").toLowerCase().trim();
+        if (!squad?.players?.length) continue;
+        if (label && (t === label || label.includes(t) || t.includes(label))) return squad;
+        if ((squad.team_label || "").toLowerCase().trim() === t) return squad;
+    }
+    return null;
+}
+
+function renderFormationsSection(body, kit) {
     const chunks = body.split(/(?=^### )/m).filter(c => c.trim());
     if (!chunks.length) return formatEditorialBody(body);
 
-    const cards = chunks.map(chunk => {
+    const cards = chunks.map((chunk, teamIndex) => {
         chunk = chunk.trim();
         let teamName = "";
         let rest = chunk;
@@ -634,7 +691,7 @@ function renderFormationsSection(body) {
             teamName = nl > 0 ? chunk.slice(4, nl).trim() : chunk.slice(4).trim();
             rest = nl > 0 ? chunk.slice(nl + 1) : "";
         }
-        const formationHtml = tryRenderFormation(rest);
+        const formationHtml = tryRenderFormation(rest, teamName, kit, teamIndex);
         const extra = formationHtml ? "" : formatParagraphs(rest);
         return `<div class="formation-team-card">
             ${teamName ? `<h4 class="ed-sub">${esc(teamName)}</h4>` : ""}
@@ -695,7 +752,7 @@ function formatEditorialBody(body) {
     }).join("");
 }
 
-function renderEditorialSections(prep) {
+function renderEditorialSections(prep, kit) {
     if (!prep?.sections?.length) return "";
     let html = "";
     for (const sec of prep.sections) {
@@ -709,7 +766,7 @@ function renderEditorialSections(prep) {
         if (titleUp === "ВЕРОЯТНИ СХЕМИ") {
             html += `<div class="editorial-section${extra}">
                 <div class="editorial-title">${sec.icon || "📄"} ${esc(sec.title)}</div>
-                ${renderFormationsSection(sec.body)}
+                ${renderFormationsSection(sec.body, kit)}
             </div>`;
             continue;
         }
@@ -823,7 +880,7 @@ function renderKit(match, kit) {
 
     if (hasGpt) {
         if (prep.sections?.length) {
-            html += renderEditorialSections(prep);
+            html += renderEditorialSections(prep, kit);
         } else if (prep.text) {
             html += `<div class="editorial-section"><div class="guide-block" style="max-height:none;color:var(--text)">${esc(prep.text)}</div></div>`;
         }
