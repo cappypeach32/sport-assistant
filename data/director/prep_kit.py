@@ -2,6 +2,8 @@
 
 import re
 
+from data.director.prematch_engine import _gpt_available
+
 
 PREP_SECTION_ICONS = {
     "ЗАГЛАВИЕ": "🏆",
@@ -113,8 +115,14 @@ def build_prep_kit(prematch_result: dict) -> dict:
     away = data.get("away") or meta.get("away_name", "")
 
     guide = data.get("gpt_narrative") or data.get("broadcast_guide_draft") or ""
-    prep_text = data.get("prep_editorial") or data.get("prep_editorial_draft") or ""
-    prep_sections = parse_prep_editorial(prep_text)
+    prep_text = data.get("prep_editorial") or ""
+    prep_sections = parse_prep_editorial(prep_text) if prep_text else []
+    has_gpt_prep = bool(prep_text)
+    ai_pending = bool(
+        _gpt_available
+        and not has_gpt_prep
+        and not data.get("prep_editorial_gpt_failed")
+    )
 
     injuries = data.get("injuries") or {}
     inj_home = injuries.get("home") or []
@@ -129,16 +137,15 @@ def build_prep_kit(prematch_result: dict) -> dict:
         "analyzed_at": data.get("analyzed_at", ""),
         "fingerprint": data.get("fingerprint", ""),
         "loading": {
-            "prep_editorial": bool(
-                data.get("prep_editorial_pending") and not data.get("prep_editorial")
-            ),
+            "prep_editorial": ai_pending,
         },
         "prep_editorial_failed": bool(data.get("prep_editorial_gpt_failed")),
+        "prep_ai_unavailable": bool(not _gpt_available and not has_gpt_prep),
         "prep_editorial": {
             "text": prep_text,
             "sections": prep_sections,
-            "is_gpt": bool(data.get("prep_editorial")),
-            "is_draft": bool(data.get("prep_editorial_draft") and not data.get("prep_editorial")),
+            "is_gpt": has_gpt_prep,
+            "is_draft": False,
         },
         "stream_facts": data.get("stream_facts") or [],
         "form": {

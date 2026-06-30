@@ -1991,7 +1991,7 @@ class PreMatchEngine:
             )
 
         if not data.get("prep_editorial"):
-            data["prep_editorial_draft"] = self._build_instant_prep_editorial(data)
+            data["prep_editorial_draft"] = ""
             data["prep_editorial_pending"] = _gpt_available
             data.pop("prep_editorial_gpt_failed", None)
         else:
@@ -3051,7 +3051,8 @@ xG Δ: {home_team} +{hxd:.2f} / {away_team} +{axd:.2f} в последните 8
         else:
             data["prep_editorial_pending"] = False
             data["prep_editorial_gpt_failed"] = True
-            print(f"[PREP] Editorial GPT gave no result for {fixture_id} — keeping API draft")
+            data["prep_editorial_draft"] = ""
+            print(f"[PREP] Editorial GPT gave no result for {fixture_id}")
 
         result["data"] = data
         self._cache[fixture_id] = {"ts": time.time(), "data": result}

@@ -89,6 +89,12 @@ a { color: var(--blue); text-decoration: none; font-weight: 600; }
     background: rgba(167,139,250,0.1); border: 1px solid rgba(167,139,250,0.25);
     border-radius: 10px; margin-bottom: 16px; font-size: 0.85rem; color: var(--purple);
 }
+.kit-loading.large {
+    flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; min-height: 280px; padding: 3rem 1.5rem;
+    font-size: 1rem; line-height: 1.55;
+}
+.kit-loading.large .spinner { width: 36px; height: 36px; border-width: 3px; }
 .spinner {
     width: 18px; height: 18px; border: 2px solid rgba(167,139,250,0.3);
     border-top-color: var(--purple); border-radius: 50%;
@@ -304,7 +310,7 @@ async function loadKit(fixtureId, showSpinner) {
     content.style.display = "block";
 
     if (showSpinner) {
-        content.innerHTML = '<div class="kit-loading"><div class="spinner"></div> Генериране на stream kit...</div>';
+        content.innerHTML = '<div class="kit-loading"><div class="spinner"></div> Генериране на AI анализ...</div>';
     }
 
     try {
@@ -320,7 +326,7 @@ async function loadKit(fixtureId, showSpinner) {
         }
         renderKit(data.match, data.kit);
         const loading = data.kit?.loading;
-        if (!loading?.prep_editorial || data.kit?.prep_editorial_failed) {
+        if (!loading?.prep_editorial || data.kit?.prep_editorial_failed || data.kit?.prep_ai_unavailable) {
             stopPoll();
         }
     } catch (e) {
@@ -496,39 +502,46 @@ function renderKit(match, kit) {
     const home = match?.home || "";
     const away = match?.away || "";
     const prep = kit.prep_editorial || {};
-    const loading = kit.loading?.prep_editorial && !kit.prep_editorial_failed;
-    const draftBadge = prep.is_draft ? '<span class="draft-badge">чернова от API</span>' : "";
-    const gptBadge = prep.is_gpt ? '<span class="draft-badge" style="background:rgba(0,255,153,0.15);color:var(--green)">AI анализ</span>' : "";
+    const hasGpt = prep.is_gpt && (prep.sections?.length || prep.text);
+    const loading = kit.loading?.prep_editorial;
+    const gptBadge = hasGpt ? '<span class="draft-badge" style="background:rgba(0,255,153,0.15);color:var(--green)">AI анализ</span>' : "";
 
     let html = `<div class="kit-header">
-        <div class="kit-title">${esc(kit.headline || `${home} срещу ${away}`)}${draftBadge}${gptBadge}</div>
+        <div class="kit-title">${esc(hasGpt ? (kit.headline || `${home} срещу ${away}`) : `${home} срещу ${away}`)}${gptBadge}</div>
         <div class="kit-meta">${esc(kit.competition)} · ${esc(formatKickoff(match?.start_time))}</div>
         <div class="kit-actions">
-            <button type="button" class="btn btn-primary" onclick="goLive()">▶ Зареди в ефир</button>
+            <button type="button" class="btn btn-primary" onclick="goLive()"${loading ? " disabled" : ""}>▶ Зареди в ефир</button>
             <button type="button" class="btn" onclick="window.open('/overlay/commentator','_blank')">🎙️ Коментатор</button>
-            <button type="button" class="btn" onclick="copyKit()">📋 Копирай анализ</button>
+            <button type="button" class="btn" onclick="copyKit()"${hasGpt ? "" : " disabled"}>📋 Копирай анализ</button>
             <button type="button" class="btn" onclick="loadKit(${state.selectedId}, true)">↻ Обнови</button>
         </div>
     </div>`;
 
     if (loading) {
-        html += `<div class="kit-loading"><div class="spinner"></div> AI надгражда анализа (до ~1 мин) — черновата по-долу е готова за ефир...</div>`;
-    } else if (kit.prep_editorial_failed && prep.is_draft) {
-        html += `<div class="warn-banner">⚠️ AI анализът не успя навреме. Показваме черновата от API — натисни <strong>Обнови</strong> за нов опит.</div>`;
+        html += `<div class="kit-loading large">
+            <div class="spinner"></div>
+            <div>Генериране на детайлен AI анализ…<br/><span style="color:var(--muted);font-size:0.9rem">Обикновено отнема до 1 минута</span></div>
+        </div>`;
+    } else if (kit.prep_ai_unavailable) {
+        html += `<div class="warn-banner">⚠️ AI анализът не е наличен (липсва OpenAI ключ на сървъра).</div>`;
+    } else if (kit.prep_editorial_failed) {
+        html += `<div class="warn-banner">⚠️ AI анализът не успя да се генерира. Натисни <strong>Обнови</strong> за нов опит.</div>`;
     }
 
-    if (prep.sections?.length) {
-        html += renderEditorialSections(prep);
-    } else if (prep.text) {
-        html += `<div class="editorial-section"><div class="guide-block" style="max-height:none;color:var(--text)">${esc(prep.text)}</div></div>`;
-    }
+    if (hasGpt) {
+        if (prep.sections?.length) {
+            html += renderEditorialSections(prep);
+        } else if (prep.text) {
+            html += `<div class="editorial-section"><div class="guide-block" style="max-height:none;color:var(--text)">${esc(prep.text)}</div></div>`;
+        }
 
-    const refHtml = renderReferenceData(kit, home, away);
-    if (refHtml) {
-        html += `<details class="ref-block">
-            <summary>📎 Справочни данни (форма, H2H, контузии)</summary>
-            <div class="ref-inner">${refHtml}</div>
-        </details>`;
+        const refHtml = renderReferenceData(kit, home, away);
+        if (refHtml) {
+            html += `<details class="ref-block">
+                <summary>📎 Справочни данни (форма, H2H, контузии)</summary>
+                <div class="ref-inner">${refHtml}</div>
+            </details>`;
+        }
     }
 
     document.getElementById("kit-content").innerHTML = html;
@@ -536,14 +549,9 @@ function renderKit(match, kit) {
 }
 
 function buildPlainText(match, kit) {
-    const lines = [];
     const prep = kit.prep_editorial || {};
-    if (prep.text) {
-        lines.push(prep.text);
-        lines.push("");
-    } else {
-        lines.push(`STREAM PREP — ${match?.home} vs ${match?.away}`, kit.competition, "");
-    }
+    if (!prep.is_gpt || !prep.text) return "";
+    const lines = [prep.text, ""];
     if (kit.stream_facts?.length) {
         lines.push("ИНТЕРЕСНИ ФАКТИ");
         kit.stream_facts.forEach(f => lines.push(`• ${f}`));
