@@ -3,6 +3,11 @@
 import re
 
 from data.director.prematch_engine import _gpt_available
+from data.director.name_translit import (
+    apply_name_map_to_text,
+    build_player_name_map,
+    latin_name_to_bg,
+)
 
 
 PREP_SECTION_ICONS = {
@@ -104,6 +109,38 @@ def _form_summary(stats: dict, form_str: str) -> dict:
     }
 
 
+_SKIP_LATIN_TOKENS = {
+    "world", "cup", "group", "stage", "final", "league", "norway", "ivory",
+    "coast", "africa", "europe", "fifa", "uefa", "team", "coach", "form",
+}
+
+
+def _enrich_player_names_in_text(text: str, name_map: dict[str, str]) -> str:
+    if not text:
+        return text
+    text = apply_name_map_to_text(text, name_map)
+
+    def _fix(m: re.Match) -> str:
+        word = m.group(0)
+        if word.lower() in _SKIP_LATIN_TOKENS or len(word) < 3:
+            return word
+        if word.isupper() and len(word) <= 4:
+            return word
+        return latin_name_to_bg(word)
+
+    return re.sub(r"\b[A-ZÀ-ÖØ-Þ][a-zà-ÿ'\-]{1,}\b", _fix, text)
+
+
+def _bg_key_players(top_scorers: dict, name_map: dict[str, str]) -> dict:
+    out: dict = {"home": [], "away": []}
+    for side in ("home", "away"):
+        for p in (top_scorers or {}).get(side) or []:
+            latin = (p.get("name") or "?").strip()
+            bg = name_map.get(latin) or latin_name_to_bg(latin)
+            out[side].append({**p, "name": bg, "name_latin": latin})
+    return out
+
+
 def build_prep_kit(prematch_result: dict) -> dict:
     """Turn prematch engine result into a stream-prep kit for the UI."""
     if not prematch_result or not prematch_result.get("available"):
@@ -115,8 +152,15 @@ def build_prep_kit(prematch_result: dict) -> dict:
     away = data.get("away") or meta.get("away_name", "")
 
     guide = data.get("gpt_narrative") or data.get("broadcast_guide_draft") or ""
+    name_map = build_player_name_map(data)
     prep_text = data.get("prep_editorial") or ""
+    if prep_text:
+        prep_text = _enrich_player_names_in_text(prep_text, name_map)
     prep_sections = parse_prep_editorial(prep_text) if prep_text else []
+    for sec in prep_sections:
+        title_up = (sec.get("title") or "").upper()
+        if title_up in ("ВЕРОЯТНИ СХЕМИ", "КЛЮЧОВИ ИГРАЧИ"):
+            sec["body"] = _enrich_player_names_in_text(sec.get("body") or "", name_map)
     has_gpt_prep = bool(prep_text)
     ai_pending = bool(
         _gpt_available
@@ -147,6 +191,7 @@ def build_prep_kit(prematch_result: dict) -> dict:
             "is_gpt": has_gpt_prep,
             "is_draft": False,
         },
+        "player_name_map": name_map,
         "stream_facts": data.get("stream_facts") or [],
         "form": {
             "home": _form_summary(data.get("home_stats") or {}, data.get("home_form", "")),
@@ -165,7 +210,7 @@ def build_prep_kit(prematch_result: dict) -> dict:
             "avg_goals": data.get("avg_h2h_goals", 0),
             "latest_scorers": data.get("h2h_latest_scorers", ""),
         },
-        "key_players": data.get("top_scorers") or {"home": [], "away": []},
+        "key_players": _bg_key_players(data.get("top_scorers") or {}, name_map),
         "key_factors": data.get("key_factors") or [],
         "advantages": {
             "home": data.get("home_advantages") or [],
@@ -175,8 +220,14 @@ def build_prep_kit(prematch_result: dict) -> dict:
         "coaches": data.get("coaches") or {},
         "referee": data.get("referee") or {},
         "injuries": {
-            "home": [{"name": i.get("name", "?"), "reason": i.get("reason", i.get("type", ""))} for i in inj_home],
-            "away": [{"name": i.get("name", "?"), "reason": i.get("reason", i.get("type", ""))} for i in inj_away],
+            "home": [{
+                "name": latin_name_to_bg(i.get("name", "?")),
+                "reason": i.get("reason", i.get("type", "")),
+            } for i in inj_home],
+            "away": [{
+                "name": latin_name_to_bg(i.get("name", "?")),
+                "reason": i.get("reason", i.get("type", "")),
+            } for i in inj_away],
         },
         "talking_points": _extract_talking_points(guide),
         "historical_facts": _extract_historical_facts(guide),

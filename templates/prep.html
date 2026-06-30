@@ -422,6 +422,15 @@ function formatInline(s) {
     return e;
 }
 
+function displayPlayerName(name) {
+    if (!name) return name;
+    const map = state._nameMap || {};
+    for (const [latin, bg] of Object.entries(map)) {
+        if (latin.toLowerCase() === String(name).toLowerCase()) return bg;
+    }
+    return name;
+}
+
 function stripCodeFences(text) {
     return (text || "").replace(/```[\w]*\n?/g, "").trim();
 }
@@ -486,7 +495,7 @@ function renderFormationPitch(rows) {
             const isGkRow = ri === rows.length - 1 && row.length === 1;
             return `<div class="pitch-row">${row.map((name, pi) => {
                 const gk = isGkRow || (ri === rows.length - 1 && pi === 0 && row.length <= 2 && /land|keeper|goal/i.test(name));
-                return `<span class="pitch-player${gk ? " gk" : ""}">${esc(name)}</span>`;
+                return `<span class="pitch-player${gk ? " gk" : ""}">${esc(displayPlayerName(name))}</span>`;
             }).join("")}</div>`;
         }).join("")}
     </div>`;
@@ -731,6 +740,7 @@ function renderKit(match, kit) {
     }
 
     document.getElementById("kit-content").innerHTML = html;
+    state._nameMap = kit.player_name_map || {};
     state._lastKitText = buildPlainText(match, kit);
 }
 
